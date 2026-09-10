@@ -112,7 +112,8 @@ func (s *WorkspaceChatService) buildWorkspaceSessionItems(ctx context.Context, s
 			CreatedAt:                   session.CreatedAt,
 			UpdatedAt:                   session.UpdatedAt,
 		}
-		item.PendingInteraction = s.pendingInteractionForSession(session)
+		// PRD 确认已降级为预览内的快捷动作，不再向前端暴露会话级待处理卡点。
+		item.PendingInteraction = nil
 		items = append(items, item)
 	}
 	return items
@@ -231,20 +232,8 @@ func (s *WorkspaceChatService) persistWorkspaceSessionInteractionStatus(ctx cont
 }
 
 func workspaceSessionStatusFromToolSummaries(summaries []streamloop.ToolCallSummary) string {
-	if status := workspaceInteractionSessionStatusFromToolSummaries(summaries); status != "" {
-		return status
-	}
 	if workspaceToolSummariesHaveGeneratedOutput(summaries) {
 		return model.ChatSessionStatusOutput
-	}
-	return ""
-}
-
-func workspaceInteractionSessionStatusFromToolSummaries(summaries []streamloop.ToolCallSummary) string {
-	for i := len(summaries) - 1; i >= 0; i-- {
-		if status := workspaceInteractionSessionStatusFromResultData(summaries[i].ResultData); status != "" {
-			return status
-		}
 	}
 	return ""
 }
@@ -293,30 +282,6 @@ func workspaceResultDataLooksLikeArtifact(resultData interface{}) bool {
 	}
 	kind := strings.TrimSpace(payload.Kind)
 	return strings.HasPrefix(kind, "agent_app_") || strings.HasPrefix(kind, "workspace_")
-}
-
-func workspaceInteractionSessionStatusFromResultData(resultData interface{}) string {
-	if resultData == nil {
-		return ""
-	}
-	raw, err := json.Marshal(resultData)
-	if err != nil {
-		return ""
-	}
-	var payload struct {
-		Kind        string `json:"kind"`
-		Interaction *struct {
-			Status   string `json:"status"`
-			CardType string `json:"card_type"`
-		} `json:"interaction"`
-	}
-	if err := json.Unmarshal(raw, &payload); err != nil || payload.Interaction == nil {
-		return ""
-	}
-	if strings.TrimSpace(payload.Kind) != "agent_app_prd" || strings.TrimSpace(payload.Interaction.CardType) != "prd_confirmation" {
-		return ""
-	}
-	return normalizeWorkspacePendingInteractionStatus(payload.Interaction.Status)
 }
 
 func normalizeWorkspacePendingInteractionStatus(status string) string {

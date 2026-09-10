@@ -669,8 +669,9 @@ func (s *AppManageService) buildAppVersionSpec(ctx context.Context, ref AppVersi
 	}, nil
 }
 
-// stopOldVersionContainer 优雅关闭旧版本容器（三次握手流程）
-// 这是新架构的核心方法：优雅关闭旧版本容器
+// stopOldVersionContainer 优雅关闭旧版本容器。
+// SDK 只有在停止接收新请求且已有请求全部返回后才发送 close 通知。
+// 等待超时只跳过本轮清理，不强制停止，避免中断长时间函数。
 func (s *AppManageService) stopOldVersionContainer(ctx context.Context, user, app, oldVersion string) error {
 	ref := AppVersionRef{User: user, App: app, Version: oldVersion}
 	runtimeName := ref.RuntimeName()
@@ -692,29 +693,11 @@ func (s *AppManageService) stopOldVersionContainer(ctx context.Context, user, ap
 		return nil
 	}
 
-	// 2. 发送 shutdown 命令给旧版本（第二次握手）
-	logger.Infof(ctx, "[stopOldVersionContainer] Sending shutdown command to %s/%s/%s (second handshake)", user, app, oldVersion)
-	if err := s.ShutdownAppVersion(ctx, user, app, oldVersion); err != nil {
-		logger.Warnf(ctx, "[stopOldVersionContainer] Failed to send shutdown command: %v", err)
-		// 不返回错误，继续执行
+	if err := s.shutdownVersionGracefullyForCleanup(ctx, user, app, oldVersion, "stopOldVersionContainer"); err != nil {
+		return err
 	}
 
-	// 3. 注册关闭等待器，等待旧版本的 close 通知（第三次握手）
-	closeWaiterChan := s.registerCloseWaiter(user, app, oldVersion)
-	defer s.unregisterCloseWaiter(user, app, oldVersion)
-
-	// 4. 等待旧版本关闭确认（最多30秒，与旧版本等待函数完成的时间一致）
-	logger.Infof(ctx, "[stopOldVersionContainer] Waiting for close notification from %s/%s/%s (third handshake, timeout: 30s)", user, app, oldVersion)
-	select {
-	case notification := <-closeWaiterChan:
-		logger.Infof(ctx, "[stopOldVersionContainer] Received close notification from old version %s/%s/%s at %s",
-			notification.User, notification.App, notification.Version, notification.CloseTime.Format(time.DateTime))
-	case <-time.After(30 * time.Second):
-		logger.Warnf(ctx, "[stopOldVersionContainer] Timeout waiting for close notification from old version %s/%s/%s, forcing stop", user, app, oldVersion)
-		// 超时后强制停止
-	}
-
-	// 5. 停止运行时实例（不删除，保留以便快速回滚）
+	// close 通知已确认 SDK 排空并完成资源清理，此时停止实例不会中断函数。
 	logger.Infof(ctx, "[stopOldVersionContainer] Stopping runtime instance %s (not removing)", runtimeName)
 	if err := s.runtimeDriver.StopAppVersion(ctx, ref); err != nil {
 		return fmt.Errorf("failed to stop app runtime instance: %w", err)

@@ -324,7 +324,7 @@ func (s *AuthService) saveUserSession(userID int64, token, refreshToken string) 
 	expiresAt := models.Time(time.Now().Add(24 * time.Hour))
 
 	// 创建用户会话
-	err := s.userSessionRepo.CreateUserSession(userID, token, refreshToken, expiresAt, "", "")
+	err := s.userSessionRepo.CreateActiveUserSession(userID, token, refreshToken, expiresAt)
 	if err != nil {
 		return fmt.Errorf("会话保存失败: %w", err)
 	}
@@ -345,7 +345,7 @@ func (s *AuthService) saveUserSessionWithExpiresAt(userID int64, token, refreshT
 	modelExpiresAt := models.Time(expiresAt)
 
 	// 创建用户会话
-	err := s.userSessionRepo.CreateUserSession(userID, token, refreshToken, modelExpiresAt, "", "")
+	err := s.userSessionRepo.CreateActiveUserSession(userID, token, refreshToken, modelExpiresAt)
 	if err != nil {
 		return fmt.Errorf("会话保存失败: %w", err)
 	}

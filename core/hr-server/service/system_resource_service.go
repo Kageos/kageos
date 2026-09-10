@@ -233,8 +233,13 @@ func (s *SystemResourceService) collectCapacity(ctx context.Context) bool {
 			remoteDatabaseAvailable = true
 			if remote.Available {
 				snapshot.DatabaseSizeAvailable = true
-				snapshot.DatabaseLogicalBytes += remote.TotalBytes
-				snapshot.Databases = append(snapshot.Databases, remote.Databases...)
+				// Physical discovery can see workspace schemas on the same MySQL instance.
+				// The runtime registry has authoritative ownership; count each schema once.
+				snapshot.Databases = mergeDatabaseInventory(snapshot.Databases, remote.Databases)
+				snapshot.DatabaseLogicalBytes = 0
+				for _, database := range snapshot.Databases {
+					snapshot.DatabaseLogicalBytes += database.UsedBytes
+				}
 				sort.SliceStable(snapshot.Databases, func(i, j int) bool {
 					if snapshot.Databases[i].Kind != snapshot.Databases[j].Kind {
 						return snapshot.Databases[i].Kind == "platform"
@@ -247,6 +252,11 @@ func (s *SystemResourceService) collectCapacity(ctx context.Context) bool {
 			}
 		}
 		snapshot.DatabaseInventoryComplete = platformDatabaseAvailable && remoteDatabaseAvailable
+		for _, database := range snapshot.Databases {
+			if database.Status == "missing" {
+				snapshot.DatabaseSizeAvailable = false
+			}
+		}
 	}
 	if err == nil {
 		err = s.repo.CreateCapacity(snapshot)
@@ -265,8 +275,8 @@ func (s *SystemResourceService) collectCapacity(ctx context.Context) bool {
 	s.mu.Lock()
 	s.lastCapacity = &snapshot
 	s.mu.Unlock()
-	if !remoteDatabaseAvailable {
-		s.markTaskPartial("capacity", started, "application database metric source is unavailable", time.Now().Add(capacityRetryInterval))
+	if !snapshot.DatabaseInventoryComplete {
+		s.markTaskPartial("capacity", started, "database metric source is unavailable", time.Now().Add(capacityRetryInterval))
 		return false
 	}
 	s.markTaskFinished("capacity", started, nil, next)
@@ -381,7 +391,7 @@ func (s *SystemResourceService) Storage() (*dto.SystemResourceStorageResp, error
 	}, nil
 }
 
-func (s *SystemResourceService) Databases(page, pageSize int, scope, keyword string, includeHistory bool) (*dto.SystemResourceDatabaseListResp, error) {
+func (s *SystemResourceService) Databases(page, pageSize int, scope, keyword string, includeHistory bool, historyOptions ...DatabaseHistoryOptions) (*dto.SystemResourceDatabaseListResp, error) {
 	current, _, _, err := s.currentState()
 	if err != nil {
 		return nil, err
@@ -397,7 +407,7 @@ func (s *SystemResourceService) Databases(page, pageSize int, scope, keyword str
 	}
 	scope = strings.ToLower(strings.TrimSpace(scope))
 	keyword = strings.ToLower(strings.TrimSpace(keyword))
-	if scope != "platform" && scope != "workspace" {
+	if scope != "platform" && scope != "workspace" && scope != "unmanaged" {
 		scope = "all"
 	}
 	databases := current.Databases
@@ -405,13 +415,32 @@ func (s *SystemResourceService) Databases(page, pageSize int, scope, keyword str
 		databases = current.LargestDatabases
 	}
 	items, total, platformCount, workspaceCount := filterAndPaginateDatabases(databases, page, pageSize, scope, keyword)
+	options := DatabaseHistoryOptions{Days: 7}
+	if len(historyOptions) > 0 {
+		options = historyOptions[0]
+	}
+	if options.Days != 30 {
+		options.Days = 7
+	}
 	capacityHistory := []dto.SystemCapacityDailyPoint(nil)
+	historyDatabases := []dto.SystemDatabaseSize{}
 	if includeHistory {
-		capacitySnapshots, historyErr := s.repo.CapacityHistory(time.Now().Add(-31*24*time.Hour), 40)
+		start, _ := localCapacityDay(time.Now().AddDate(0, 0, -options.Days))
+		snapshots, historyErr := s.repo.CapacityHistory(start, options.Days+2)
 		if historyErr != nil {
 			return nil, fmt.Errorf("load capacity history: %w", historyErr)
 		}
-		capacityHistory = tailCapacityDailyHistory(buildCapacityDailyHistory(capacitySnapshots), 7)
+		seen := map[string]bool{}
+		for _, snapshot := range append(snapshots, *current) {
+			for _, database := range snapshot.Databases {
+				if (scope == "all" || database.Kind == scope) && !seen[database.Key()] {
+					seen[database.Key()] = true
+					historyDatabases = append(historyDatabases, dto.SystemDatabaseSize{Name: database.Name, Kind: database.Kind, SourceID: database.SourceID})
+				}
+			}
+		}
+		sort.Slice(historyDatabases, func(i, j int) bool { return historyDatabases[i].Name < historyDatabases[j].Name })
+		capacityHistory = scopedCapacityHistory(snapshots, scope, options, time.Now())
 	}
 	return &dto.SystemResourceDatabaseListResp{
 		Items:                     items,
@@ -425,6 +454,7 @@ func (s *SystemResourceService) Databases(page, pageSize int, scope, keyword str
 		DatabaseInventoryComplete: current.DatabaseInventoryComplete,
 		CollectedAt:               s.capacityCollectedAt(),
 		CapacityHistory:           capacityHistory,
+		HistoryDatabases:          historyDatabases,
 		CapacityRetentionDays:     int(capacityRetention / (24 * time.Hour)),
 		CapacityScheduleLocal:     fmt.Sprintf("%02d:%02d", capacityRunHour, capacityRunMinute),
 	}, nil
@@ -779,6 +809,13 @@ func decodeDatabaseStats(data []byte) (dto.SystemDatabaseCapacityStats, bool) {
 	if json.Unmarshal(data, &response) != nil {
 		return dto.SystemDatabaseCapacityStats{}, false
 	}
+	// During mixed-version rollout, an unidentified remote schema cannot be
+	// safely deduplicated against physical discovery. Report partial coverage.
+	for _, database := range response.Databases {
+		if response.Available && database.SourceID == "" {
+			return dto.SystemDatabaseCapacityStats{}, false
+		}
+	}
 	return response, true
 }
 
@@ -927,8 +964,10 @@ func historyPoint(sample model.SystemResourceSample) dto.SystemResourceHistoryPo
 func buildCapacityDailyHistory(snapshots []dto.SystemResourceSnapshot) []dto.SystemCapacityDailyPoint {
 	result := make([]dto.SystemCapacityDailyPoint, 0, len(snapshots))
 	indexByDay := make(map[string]int, len(snapshots))
+	versionByDay := make(map[string]int, len(snapshots))
 	for _, snapshot := range snapshots {
 		day := snapshot.CollectedAt.In(time.Local).Format("2006-01-02")
+		versionByDay[day] = snapshot.CapacitySchemaVersion
 		platformCount, workspaceCount := 0, 0
 		for _, database := range snapshot.Databases {
 			if database.Kind == "platform" {
@@ -938,6 +977,7 @@ func buildCapacityDailyHistory(snapshots []dto.SystemResourceSnapshot) []dto.Sys
 			}
 		}
 		point := dto.SystemCapacityDailyPoint{
+			Date:        day,
 			CollectedAt: snapshot.CollectedAt, DatabaseLogicalBytes: snapshot.DatabaseLogicalBytes,
 			DatabaseCount: len(snapshot.Databases), PlatformDatabaseCount: platformCount, WorkspaceDatabaseCount: workspaceCount,
 			DatabaseSizeAvailable:  snapshot.DatabaseSizeAvailable && snapshot.DatabaseInventoryComplete,
@@ -952,7 +992,13 @@ func buildCapacityDailyHistory(snapshots []dto.SystemResourceSnapshot) []dto.Sys
 	}
 	for index := 1; index < len(result); index++ {
 		current, previous := &result[index], result[index-1]
+		previousDay, _ := localCapacityDay(previous.CollectedAt)
+		currentDay, _ := localCapacityDay(current.CollectedAt)
+		if !previousDay.AddDate(0, 0, 1).Equal(currentDay) || versionByDay[previous.Date] != versionByDay[current.Date] {
+			continue
+		}
 		if current.DatabaseSizeAvailable && previous.DatabaseSizeAvailable {
+			current.PreviousCollectedAt = &previous.CollectedAt
 			current.DatabaseLogicalDelta = signedByteDelta(current.DatabaseLogicalBytes, previous.DatabaseLogicalBytes)
 			current.DatabaseLogicalDeltaAvailable = true
 		}
@@ -1008,4 +1054,74 @@ func buildStorageForecast(current dto.SystemResourceSnapshot, history []dto.Syst
 		forecast.Status, forecast.Message = "warning", "Storage is projected to reach the expansion threshold within 30 days"
 	}
 	return forecast
+}
+
+// DatabaseHistoryOptions selects the calendar window independently of list pagination.
+type DatabaseHistoryOptions struct {
+	Days int
+	Name string
+}
+
+func localCapacityDay(at time.Time) (time.Time, time.Time) {
+	at = at.In(time.Local)
+	start := time.Date(at.Year(), at.Month(), at.Day(), 0, 0, 0, 0, at.Location())
+	return start, start.AddDate(0, 0, 1)
+}
+
+func scopedCapacityHistory(snapshots []dto.SystemResourceSnapshot, scope string, options DatabaseHistoryOptions, now time.Time) []dto.SystemCapacityDailyPoint {
+	filtered := make([]dto.SystemResourceSnapshot, 0, len(snapshots))
+	for _, snapshot := range snapshots {
+		selected := snapshot
+		if scope == "unmanaged" && snapshot.CapacitySchemaVersion < 3 {
+			selected.DatabaseInventoryComplete = false
+		}
+		selected.Databases = nil
+		selected.DatabaseLogicalBytes = 0
+		for _, database := range snapshot.Databases {
+			if scope != "all" && database.Kind != scope || options.Name != "" && database.Key() != options.Name {
+				continue
+			}
+			selected.Databases = append(selected.Databases, database)
+			if database.Status == "missing" {
+				selected.DatabaseSizeAvailable = false
+			}
+			selected.DatabaseLogicalBytes += database.UsedBytes
+		}
+		if options.Name != "" && len(selected.Databases) == 0 {
+			selected.DatabaseSizeAvailable = false
+			selected.DatabaseInventoryComplete = false
+		}
+		filtered = append(filtered, selected)
+	}
+	points := buildCapacityDailyHistory(filtered)
+	byDay := map[string]dto.SystemCapacityDailyPoint{}
+	for _, point := range points {
+		byDay[point.CollectedAt.In(time.Local).Format("2006-01-02")] = point
+	}
+	start, _ := localCapacityDay(now.AddDate(0, 0, 1-options.Days))
+	result := make([]dto.SystemCapacityDailyPoint, 0, options.Days)
+	for index := 0; index < options.Days; index++ {
+		day := start.AddDate(0, 0, index)
+		point, ok := byDay[day.Format("2006-01-02")]
+		if !ok {
+			point.CollectedAt = day
+			point.Date = day.Format("2006-01-02")
+		}
+		result = append(result, point)
+	}
+	return result
+}
+
+func mergeDatabaseInventory(local, remote []dto.SystemDatabaseSize) []dto.SystemDatabaseSize {
+	remoteKeys := make(map[string]bool, len(remote))
+	for _, database := range remote {
+		remoteKeys[database.Key()] = true
+	}
+	result := make([]dto.SystemDatabaseSize, 0, len(local)+len(remote))
+	for _, database := range local {
+		if !remoteKeys[database.Key()] {
+			result = append(result, database)
+		}
+	}
+	return append(result, remote...)
 }

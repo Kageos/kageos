@@ -73,6 +73,50 @@ export function resolveWorkspaceResourcePath(path: string, basePath = ''): strin
   return joinWorkspacePath(basePath, normalized) || normalized
 }
 
+export interface WorkspaceResourceInsertion {
+  value: string
+  insertedText: string
+  cursor: number
+}
+
+export function insertWorkspaceResourceTokensAtOffset(
+  text: string,
+  paths: string[],
+  offset: number,
+  basePath = ''
+): WorkspaceResourceInsertion {
+  const source = String(text || '')
+  const cursor = Math.max(0, Math.min(offset, source.length))
+  const existingPaths = new Set(
+    parseWorkspacePromptSegments(source, basePath)
+      .filter(segment => segment.type === 'resource')
+      .map(segment => normalizeWorkspaceResourcePath(segment.path || ''))
+      .filter(Boolean)
+  )
+  const tokens: string[] = []
+
+  paths.forEach((path) => {
+    const normalized = normalizeWorkspaceResourcePath(path)
+    const resolved = normalizeWorkspaceResourcePath(resolveWorkspaceResourcePath(normalized, basePath))
+    if (!normalized || !resolved || existingPaths.has(resolved)) return
+    existingPaths.add(resolved)
+    tokens.push(wrapWorkspaceResourcePath(normalized))
+  })
+
+  if (tokens.length === 0) {
+    return { value: source, insertedText: '', cursor }
+  }
+
+  const prefix = cursor > 0 && !/\s/.test(source[cursor - 1] || '') ? ' ' : ''
+  const suffix = cursor < source.length && !/\s/.test(source[cursor] || '') ? ' ' : ''
+  const insertedText = `${prefix}${tokens.join(' ')}${suffix}`
+  return {
+    value: `${source.slice(0, cursor)}${insertedText}${source.slice(cursor)}`,
+    insertedText,
+    cursor: cursor + insertedText.length,
+  }
+}
+
 export function unwrapWorkspaceResourceToken(token: string, basePath = ''): string {
   const trimmed = String(token || '').trim()
   if (!trimmed.startsWith('<') || !trimmed.endsWith('>')) return ''

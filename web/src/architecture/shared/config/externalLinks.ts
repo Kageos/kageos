@@ -6,6 +6,7 @@ export type KageosDocSlug =
   | 'connectors'
   | 'login'
   | 'runtime'
+  | 'data-backup'
   | 'permissions'
   | 'automation'
   | 'hub'

@@ -55,4 +55,28 @@ describe('SystemUsagePanel', () => {
     expect(tooltip).toContain('33')
     expect(tooltip).toContain('1')
   })
+  it('keeps the newest period when earlier requests finish later', async () => {
+    const wrapper = mount(SystemUsagePanel)
+    await flushPromises()
+    const base = await usageApi.getSystemResourceUsage.mock.results[0]!.value
+    let finishOld!: (value: unknown) => void
+    let finishNew!: (value: unknown) => void
+    usageApi.getSystemResourceUsage.mockImplementationOnce(() => new Promise(resolve => { finishOld = resolve }))
+    usageApi.getSystemResourceUsage.mockImplementationOnce(() => new Promise(resolve => { finishNew = resolve }))
+    const period = wrapper.findAllComponents({ name: 'ElRadioGroup' })[0]!
+    period.vm.$emit('update:modelValue', 30)
+    period.vm.$emit('change', 30)
+    await wrapper.vm.$nextTick()
+    period.vm.$emit('update:modelValue', 7)
+    period.vm.$emit('change', 7)
+    await wrapper.vm.$nextTick()
+    finishNew({ ...base, operations_period: 9876 })
+    await flushPromises()
+    finishOld({ ...base, operations_period: 1234 })
+    await flushPromises()
+    expect(wrapper.find('.usage-summary-grid').text()).toContain('9,876')
+    expect(wrapper.find('.usage-summary-grid').text()).not.toContain('1,234')
+    expect(usageApi.getSystemResourceUsage).toHaveBeenLastCalledWith(7, 1, 10)
+  })
+
 })

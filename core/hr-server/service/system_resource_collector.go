@@ -32,7 +32,7 @@ type systemResourceCollector interface {
 	CollectCapacity(context.Context) (dto.SystemResourceSnapshot, error)
 }
 
-const systemCapacitySchemaVersion = 2
+const systemCapacitySchemaVersion = 4
 
 type commandOutputRunner func(ctx context.Context, name string, args ...string) ([]byte, error)
 

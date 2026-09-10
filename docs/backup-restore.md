@@ -151,3 +151,21 @@ go run ./cmd/kagectl restore <archive> --force --keep-rollback
 - 全局 `kageos backup <instance>` 多实例管理器包装。
 
 这些能力可以在手动备份/恢复经过真实生产演练后，复用 `timer-scheduler` 和实例管理器逐步增加。
+
+## 官网文档固定地址
+
+系统设置 → 数据备份 → 查看文档使用专用页面：
+
+- 中文：https://kageos.ai/zh/docs/data-backup
+- 英文：https://kageos.ai/docs/data-backup
+- 中文官网同路径：https://kageos.com/zh/docs/data-backup
+
+前端通过 `getKageosDocsURL('data-backup', locale)` 统一生成地址，沿用现有官网域名策略。官网对应 `src/pages/zh/docs/data-backup.astro` 和 `src/pages/docs/data-backup.astro`，正文集中在 `src/components/DataBackupGuide.astro`。
+
+此地址是产品帮助入口的长期契约。七牛云及其他服务商的配置、连接排障和恢复说明后续在该页补充，不改产品链接，不跳转通用运行环境页面。若未来文档迁移，必须保留旧地址并重定向到对应备份文档。
+
+### 备份配置页面交互
+
+备份页面展示已保存配置摘要；没有存储桶时显示“新增备份配置”，已有配置时显示“编辑备份配置”，均通过弹窗填写。顶部自动备份状态以服务端已保存配置为准。弹窗内“测试连接”只验证当前草稿，不保存；“保存配置”成功后关闭弹窗并更新摘要，失败保留输入及错误信息。取消、关闭按钮和 Escape 都通过未保存修改确认；点击遮罩不会关闭。表单可滚动，底部操作始终可见。刷新状态或记录不会丢弃草稿，浏览器刷新时对未保存修改提示离开确认。
+
+“立即备份”使用已保存配置。当前后端要求启用自动备份且宿主机执行器就绪，页面展示具体不可用原因；有未保存修改或正在运行、已提交请求时避免重复提交。

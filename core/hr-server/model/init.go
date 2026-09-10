@@ -30,6 +30,7 @@ func InitModels(db *gorm.DB) error {
 
 		// 第二层：依赖 User 的表
 		&AuthExternalIdentity{},
+		&UserStatusEvent{},
 		&UserSession{},       // 引用 User
 		&EmailVerification{}, // 引用 User
 		&EmailCode{},         // 不引用其他表，但依赖 User 存在

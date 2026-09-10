@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -89,23 +90,69 @@ func (s *LogArchiveService) RunScheduled(ctx context.Context, event scheduledsdk
 
 func (s *LogArchiveService) Run(ctx context.Context) (archiveRunSummary, error) {
 	var out archiveRunSummary
+	err := s.repo.Exclusive(ctx, func(repo *repository.LogArchiveRepository) error {
+		worker := *s
+		worker.repo = repo
+		var err error
+		out, err = worker.run(ctx)
+		return err
+	})
+	return out, err
+}
+
+// Retry resumes the durable checkpoint, including legacy failed batches whose
+// archive was verified before source cleanup. Completed requests are idempotent.
+func (s *LogArchiveService) Retry(ctx context.Context, id int64) error {
+	return s.repo.Exclusive(ctx, func(repo *repository.LogArchiveRepository) error {
+		worker := *s
+		worker.repo = repo
+		batch, err := repo.Get(ctx, id)
+		if err != nil {
+			return err
+		}
+		if batch.Status == model.LogArchiveStatusCompleted {
+			return nil
+		}
+		return worker.attempt(ctx, batch)
+	})
+}
+
+func (s *LogArchiveService) attempt(ctx context.Context, batch *model.LogArchiveBatch) error {
+	batch.Attempts++
+	batch.NextRetryAt = nil
+	if err := s.repo.Save(ctx, batch); err != nil {
+		return err
+	}
+	if err := s.processBatch(ctx, batch); err != nil {
+		s.markFailed(ctx, batch, err)
+		return err
+	}
+	return nil
+}
+
+func (s *LogArchiveService) run(ctx context.Context) (archiveRunSummary, error) {
+	var out archiveRunSummary
 	cutoff := time.Now().AddDate(0, 0, -s.config.RetentionDays)
-	for out.Batches < s.config.MaxBatches {
+	var failures []error
+	for attempts := 0; attempts < s.config.MaxBatches; attempts++ {
 		batch, err := s.nextBatch(ctx, cutoff)
 		if repository.IsArchiveNotFound(err) {
-			return out, nil
+			return out, errors.Join(failures...)
 		}
 		if err != nil {
 			return out, err
 		}
-		if err := s.processBatch(ctx, batch); err != nil {
-			s.markFailed(ctx, batch, err)
-			return out, err
+		if err := s.attempt(ctx, batch); err != nil {
+			failures = append(failures, err)
+			if ctx.Err() != nil {
+				return out, errors.Join(failures...)
+			}
+			continue
 		}
 		out.Batches++
 		out.Records += batch.RecordCount
 	}
-	return out, nil
+	return out, errors.Join(failures...)
 }
 
 func (s *LogArchiveService) nextBatch(ctx context.Context, cutoff time.Time) (*model.LogArchiveBatch, error) {
@@ -149,7 +196,7 @@ func (s *LogArchiveService) nextBatch(ctx context.Context, cutoff time.Time) (*m
 }
 
 func (s *LogArchiveService) processBatch(ctx context.Context, batch *model.LogArchiveBatch) error {
-	if batch.Status == model.LogArchiveStatusUploaded {
+	if batch.ObjectVerifiedAt != nil && batch.ObjectRef != "" && batch.SHA256 != "" {
 		return s.deleteArchivedSource(ctx, batch)
 	}
 	tempPath, summary, err := s.exportBatch(ctx, batch)
@@ -206,7 +253,7 @@ func (s *LogArchiveService) processBatch(ctx context.Context, batch *model.LogAr
 	if uploaded.Size != stat.Size() || uploaded.Hash != hash {
 		return fmt.Errorf("archive upload result mismatch")
 	}
-	if err := s.verifyUploadedObject(ctx, uploaded.ServerDownloadURL, stat.Size()); err != nil {
+	if err := s.verifyUploadedObject(ctx, uploaded.ServerDownloadURL, stat.Size(), hash); err != nil {
 		return err
 	}
 	complete, err := apicall.BatchUploadComplete(ctx, &dto.BatchUploadCompleteReq{Items: []dto.BatchUploadCompleteItem{{
@@ -292,11 +339,19 @@ func (s *LogArchiveService) deleteArchivedSource(ctx context.Context, batch *mod
 		return fmt.Errorf("delete archived logs: %w", err)
 	}
 	now := time.Now()
-	batch.Status, batch.DeletedAtSource, batch.ErrorMessage = model.LogArchiveStatusCompleted, &now, ""
-	return s.repo.Save(ctx, batch)
+	// Do not advance the in-memory checkpoint until persistence succeeds: the
+	// error path must retain uploaded, even if all source rows are already gone.
+	completed := *batch
+	completed.Status, completed.DeletedAtSource, completed.ErrorMessage = model.LogArchiveStatusCompleted, &now, ""
+	completed.NextRetryAt = nil
+	if err := s.repo.Save(ctx, &completed); err != nil {
+		return err
+	}
+	*batch = completed
+	return nil
 }
 
-func (s *LogArchiveService) verifyUploadedObject(ctx context.Context, downloadURL string, expectedSize int64) error {
+func (s *LogArchiveService) verifyUploadedObject(ctx context.Context, downloadURL string, expectedSize int64, expectedHash string) error {
 	if strings.TrimSpace(downloadURL) == "" {
 		return fmt.Errorf("archive download URL is empty")
 	}
@@ -304,25 +359,21 @@ func (s *LogArchiveService) verifyUploadedObject(ctx context.Context, downloadUR
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Range", "bytes=0-0")
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("verify archive object: %w", err)
 	}
 	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 2))
-	if resp.StatusCode != http.StatusPartialContent && resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("verify archive object: HTTP %d", resp.StatusCode)
 	}
-	actualSize := resp.ContentLength
-	if resp.StatusCode == http.StatusPartialContent {
-		parts := strings.Split(resp.Header.Get("Content-Range"), "/")
-		if len(parts) == 2 {
-			actualSize, _ = strconv.ParseInt(parts[1], 10, 64)
-		}
+	hash := sha256.New()
+	size, err := io.Copy(hash, io.LimitReader(resp.Body, expectedSize+1))
+	if err != nil {
+		return fmt.Errorf("read archive object: %w", err)
 	}
-	if actualSize != expectedSize {
-		return fmt.Errorf("verify archive object size: got=%d expected=%d", actualSize, expectedSize)
+	if size != expectedSize || hex.EncodeToString(hash.Sum(nil)) != expectedHash {
+		return fmt.Errorf("archive object size or SHA256 mismatch")
 	}
 	return nil
 }
@@ -331,9 +382,14 @@ func (s *LogArchiveService) markFailed(ctx context.Context, batch *model.LogArch
 	if batch == nil {
 		return
 	}
-	if batch.Status != model.LogArchiveStatusUploaded {
+	if batch.ObjectVerifiedAt != nil && batch.ObjectRef != "" && batch.SHA256 != "" {
+		batch.Status = model.LogArchiveStatusUploaded
+	} else {
 		batch.Status = model.LogArchiveStatusFailed
 	}
+	delay := 15 * time.Minute * time.Duration(1<<min(max(batch.Attempts-1, 0), 6))
+	nextRetry := time.Now().Add(delay)
+	batch.NextRetryAt = &nextRetry
 	batch.ErrorMessage = truncate(runErr.Error(), 4000)
 	if err := s.repo.Save(context.WithoutCancel(ctx), batch); err != nil {
 		logger.Warnf(ctx, "[LogArchive] save failure state: %v", err)

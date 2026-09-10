@@ -43,6 +43,7 @@ describe('SystemStorageAssetsPanel', () => {
     await flushPromises()
 
     expect(storageApi.listSystemStorageAssets).toHaveBeenCalledWith(expect.objectContaining({ status: 'completed', page_size: 20 }))
+    expect(wrapper.text()).not.toContain('systemSettings.resources.assets.openConsole')
     expect(wrapper.text()).toContain('a.png')
     expect(wrapper.text()).toContain('订单工作空间')
     expect(wrapper.text()).toContain('/orders')
@@ -78,4 +79,17 @@ describe('SystemStorageAssetsPanel', () => {
     expect(document.body.textContent).toContain('127.0.0.1')
     wrapper.unmount()
   })
+  it('switches to gallery and keeps file details accessible', async () => {
+    const wrapper = mount(SystemStorageAssetsPanel)
+    await flushPromises()
+    wrapper.findComponent({ name: 'ElRadioGroup' }).vm.$emit('update:modelValue', 'grid')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('.asset-gallery').exists()).toBe(true)
+    expect(wrapper.find('.asset-table').exists()).toBe(false)
+    await wrapper.find('.gallery-copy .file-name-button').trigger('click')
+    await flushPromises()
+    expect(storageApi.listSystemStorageAssetAudits).toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
 })

@@ -1,9 +1,12 @@
-import { mount } from '@vue/test-utils'
+import { mount, flushPromises } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import { describe, expect, it, vi } from 'vitest'
+import { getUserInfo } from '@/architecture/presentation/context/api/auth'
 import { searchUsersFuzzy } from '@/architecture/presentation/context/api/user'
-import { searchResources } from '@/architecture/presentation/context/api/service-tree'
+import { searchResources, searchFunctions, getServiceTreeDetail } from '@/architecture/presentation/context/api/service-tree'
 import StructuredPromptComposer from './StructuredPromptComposer.vue'
+
+vi.mock('@/architecture/presentation/context/api/auth', () => ({ getUserInfo: vi.fn(async () => ({ username: 'beiluo', nickname: '北落', avatar: '', email: '', signature: '' })) }))
 
 vi.mock('@/architecture/presentation/context/api/user', () => ({
   getUsersByUsernames: vi.fn(async () => ({ users: [] })),
@@ -22,6 +25,7 @@ vi.mock('@/architecture/presentation/context/api/service-tree', () => ({
   getServiceTreeDetail: vi.fn(async () => {
     throw new Error('not found')
   }),
+  searchFunctions: vi.fn(async () => ({ functions: [] })),
   searchResources: vi.fn(async () => ({
     items: [{
       id: 1,
@@ -57,6 +61,114 @@ function mountComposer(modelValue: string) {
 }
 
 describe('StructuredPromptComposer', () => {
+  it('browses the current directory on bare slash and filters types and other directories', async () => {
+    vi.useFakeTimers()
+    const result = { items: [
+      { id: 1, name: '订单表', code: 'orders', type: 'function' as const, template_type: 'table', full_code_path: '/system/app/orders.table' },
+      { id: 2, name: '新增订单', code: 'create', type: 'function' as const, template_type: 'form', full_code_path: '/system/app/create.form' },
+      { id: 3, name: '外部订单', code: 'orders', type: 'function' as const, template_type: 'table', full_code_path: '/system/app2/orders.table' },
+    ], total: 3, page: 1, page_size: 100 }
+    vi.mocked(searchResources).mockResolvedValueOnce(result)
+    vi.mocked(searchFunctions).mockResolvedValueOnce({ functions: result.items.map(item => ({ ...item, description: '', app_id: 1, app_user: 'system', app_code: 'app' })), total: 3, page: 1, page_size: 100 }).mockResolvedValueOnce({ functions: result.items.map(item => ({ ...item, description: '', app_id: 1, app_user: 'system', app_code: 'app' })), total: 3, page: 1, page_size: 100 })
+    const wrapper = mountComposer('')
+    try {
+      await wrapper.setProps({ fullCodePath: '/system/app/current.docs' })
+      const editor = wrapper.find('[data-testid="structured-prompt-editor"]')
+      editor.element.textContent = '/'
+      await editor.trigger('input')
+      await vi.advanceTimersByTimeAsync(230)
+      expect(searchResources).toHaveBeenLastCalledWith(expect.objectContaining({ keyword: '', full_code_path: '/system/app' }))
+      const panel = () => document.querySelector('[data-testid="structured-prompt-mention-panel"]')!
+      expect(panel().textContent).toContain('订单表')
+      expect(Array.from(panel().querySelectorAll('[role="tab"]')).map(tab => tab.textContent)).toEqual(['全部', '文档', '目录', '数据表', '表单', '图表', '其他'])
+      expect(Array.from(panel().querySelectorAll('.spc-mention-type')).map(tag => tag.textContent)).toEqual(['数据表', '表单'])
+      expect(panel().textContent).not.toContain('外部订单')
+      const formTab = Array.from(panel().querySelectorAll<HTMLButtonElement>('[role="tab"]')).find(button => button.textContent === '表单')!
+      formTab.click()
+      await vi.advanceTimersByTimeAsync(230)
+      expect(panel().textContent).toContain('新增订单')
+      expect(panel().textContent).not.toContain('订单表')
+      const other = Array.from(panel().querySelectorAll<HTMLButtonElement>('.spc-resource-scopes button'))[1]!
+      other.click()
+      await vi.advanceTimersByTimeAsync(230)
+      expect(searchFunctions).toHaveBeenLastCalledWith(expect.objectContaining({ full_code_path: '', template_type: 'form' }))
+      expect(panel().textContent).not.toContain('新增订单')
+      // A fresh slash session resets scope and type.
+      await editor.trigger('keydown', { key: 'Escape' })
+      editor.element.textContent = '/'
+      await editor.trigger('input')
+      await vi.advanceTimersByTimeAsync(230)
+      expect(searchResources).toHaveBeenLastCalledWith(expect.objectContaining({ full_code_path: '/system/app', resource_type: 'all' }))
+      await editor.trigger('keydown', { key: 'Enter' })
+      expect(wrapper.emitted('update:modelValue')?.at(-1)?.[0]).toBe('</system/app/orders.table> ')
+    } finally {
+      wrapper.unmount()
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps the trailing empty line and middle caret stable when typing newlines', async () => {
+    const wrapper = mount(StructuredPromptComposer, { attachTo: document.body, props: { modelValue: '第一行' } })
+    try {
+      const editor = wrapper.find('[data-testid="structured-prompt-editor"]')
+      const element = editor.element as HTMLElement
+      element.focus()
+      const range = document.createRange()
+      range.selectNodeContents(element)
+      range.collapse(false)
+      window.getSelection()!.removeAllRanges()
+      window.getSelection()!.addRange(range)
+      await editor.trigger('keydown', { key: 'Enter', shiftKey: true })
+      expect(wrapper.emitted('update:modelValue')?.at(-1)?.[0]).toBe('第一行\n')
+      expect(element.lastChild?.nodeName).toBe('BR')
+      const selection = window.getSelection()!
+      expect(selection.anchorNode?.textContent).toBe('\n')
+      expect(selection.anchorOffset).toBe(1)
+      range.setStart(element.firstChild!, 1)
+      range.collapse(true)
+      selection.removeAllRanges()
+      selection.addRange(range)
+      await editor.trigger('keydown', { key: 'Enter', shiftKey: true })
+      expect(wrapper.emitted('update:modelValue')?.at(-1)?.[0]).toBe('第\n一行\n')
+      expect(selection.anchorNode?.textContent).toBe('\n')
+      expect(selection.anchorOffset).toBe(1)
+    } finally { wrapper.unmount() }
+  })
+
+  it('shows the signed-in user on bare @ and allows keyboard insertion', async () => {
+    vi.useFakeTimers()
+    const wrapper = mountComposer('')
+    try {
+      const editor = wrapper.find('[data-testid="structured-prompt-editor"]')
+      editor.element.textContent = '@'
+      await editor.trigger('input')
+      await vi.advanceTimersByTimeAsync(230)
+      expect(getUserInfo).toHaveBeenCalled()
+      expect(document.querySelector('[data-testid="structured-prompt-mention-panel"]')?.textContent).toContain('我自己')
+      await editor.trigger('keydown', { key: 'Enter' })
+      expect(wrapper.emitted('update:modelValue')?.at(-1)?.[0]).toBe('@beiluo ')
+    } finally { wrapper.unmount(); vi.useRealTimers() }
+  })
+
+  it('opens resource details outside the editor and loads the directory purpose', async () => {
+    const wrapper = mountComposer('</system/app>')
+    try {
+      vi.mocked(getServiceTreeDetail).mockResolvedValueOnce({
+        id: 1, name: '客户管理', code: 'app', type: 'package', full_code_path: '/system/app',
+        description: '维护客户资料并安排后续跟进。', tags: '', app_id: 1, ref_id: 0, created_at: '', updated_at: '',
+      })
+      await wrapper.find('.spc-editor-token.is-resource').trigger('click')
+      await flushPromises()
+      const card = document.querySelector<HTMLElement>('[data-testid="structured-prompt-info-card"]')!
+      expect(wrapper.element.contains(card)).toBe(false)
+      expect(card.textContent).toContain('维护客户资料并安排后续跟进。')
+      expect(card.textContent).toContain('客户管理')
+      card.querySelector<HTMLButtonElement>('[aria-label="关闭信息卡片"]')!.click()
+      await nextTick()
+      expect(document.querySelector('[data-testid="structured-prompt-info-card"]')).toBeNull()
+    } finally { wrapper.unmount() }
+  })
+
   it('keeps editing and preview content left-aligned', async () => {
     const wrapper = mountComposer('从左侧开始输入')
     const editor = wrapper.find('[data-testid="structured-prompt-editor"]')
@@ -228,10 +340,11 @@ describe('StructuredPromptComposer', () => {
 
     await token.trigger('click')
 
-    const card = wrapper.find('[data-testid="structured-prompt-info-card"]')
-    expect(card.exists()).toBe(true)
-    expect(card.text()).toContain('@system(系统)')
-    expect(card.text()).toContain('@system')
+    const card = document.querySelector('[data-testid="structured-prompt-info-card"]')
+    expect(card).not.toBeNull()
+    expect(card?.textContent).toContain('@system(系统)')
+    expect(card?.textContent).toContain('@system')
+    wrapper.unmount()
   })
 
   it('normalizes already decorated user mentions instead of nesting labels', async () => {

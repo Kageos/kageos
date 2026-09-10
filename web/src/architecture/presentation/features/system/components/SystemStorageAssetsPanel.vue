@@ -8,10 +8,6 @@
         :closable="false"
         show-icon
       />
-      <el-button v-if="result?.console_url" :icon="Link" plain @click="openConsole">{{ t('systemSettings.resources.assets.openConsole') }}</el-button>
-      <el-tooltip v-else :content="t('systemSettings.resources.assets.consoleUnavailableHint')" placement="top">
-        <el-button :icon="Link" plain disabled>{{ t('systemSettings.resources.assets.openConsole') }}</el-button>
-      </el-tooltip>
     </div>
 
     <template v-if="result?.metadata_available">
@@ -57,7 +53,29 @@
           <el-button :icon="Refresh" @click="load">{{ t('systemSettings.resources.assets.refresh') }}</el-button>
         </div>
 
-        <el-table :data="result.list" size="small" stripe class="asset-table" @row-dblclick="openDetail">
+        <div class="asset-view-heading">
+          <h4>{{ t('systemSettings.resources.assets.file') }} <span>{{ result.total.toLocaleString() }}</span></h4>
+          <el-radio-group v-model="assetView" size="small">
+            <el-radio-button value="list">{{ t('systemSettings.resources.dashboard.filesList') }}</el-radio-button>
+            <el-radio-button value="grid">{{ t('systemSettings.resources.dashboard.filesGrid') }}</el-radio-button>
+          </el-radio-group>
+        </div>
+        <div v-if="assetView === 'grid' && result.list.length" class="asset-gallery">
+          <article v-for="asset in result.list" :key="asset.ref" class="gallery-file">
+            <button class="gallery-cover" :aria-label="asset.file_name" @click="asset.previewable && asset.status === 'completed' ? preview(asset) : openDetail(asset)">
+              <el-image v-if="asset.thumbnail_url" :src="asset.thumbnail_url" fit="cover"><template #error><component :is="fileIcon(asset)" /></template></el-image>
+              <component :is="fileIcon(asset)" v-else />
+              <el-tag size="small" :type="statusType(asset.status)">{{ statusLabel(asset.status) }}</el-tag>
+            </button>
+            <div class="gallery-copy">
+              <button class="file-name-button" :title="asset.file_name" @click="openDetail(asset)">{{ asset.file_name }}</button>
+              <small>{{ formatBytes(asset.file_size) }} · {{ workspaceName(workspacePathFromRouter(asset.router)) }}</small>
+              <div class="gallery-footer"><span>{{ formatTime(asset.uploaded_at) }}</span><el-button v-if="asset.status === 'completed'" link :icon="Download" :aria-label="t('systemSettings.resources.assets.download')" @click="download(asset)" /></div>
+            </div>
+          </article>
+        </div>
+        <el-empty v-else-if="assetView === 'grid'" />
+        <el-table v-if="assetView === 'list'" :data="result.list" size="small" stripe class="asset-table" @row-dblclick="openDetail">
           <el-table-column :label="t('systemSettings.resources.assets.file')" min-width="220">
             <template #default="{ row }">
               <div class="file-cell">
@@ -161,7 +179,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Delete, Document, Download, Link, MoreFilled, Picture, Refresh, VideoCamera, View } from '@element-plus/icons-vue'
+import { Delete, Document, Download, MoreFilled, Picture, Refresh, VideoCamera, View } from '@element-plus/icons-vue'
 import { useI18n } from 'vue-i18n'
 import { getAppList } from '@/architecture/presentation/context/api/app'
 import type { App } from '@/architecture/domain/types'
@@ -172,6 +190,7 @@ import {
 
 const { t } = useI18n()
 const loading = ref(false)
+const assetView = ref('list')
 const page = ref(1)
 const pageSize = 20
 const workspacePath = ref('')
@@ -263,7 +282,6 @@ function formatTime(value: string) { return new Date(value).toLocaleString() }
 function statusType(value: string) { return value === 'completed' ? 'success' : value === 'deleted' ? 'info' : value.includes('failed') ? 'danger' : 'warning' }
 function statusLabel(value: string) { const key = value === 'completed' ? 'statusCompleted' : value === 'deleted' ? 'statusDeleted' : value.includes('failed') ? 'statusFailed' : 'statusPending'; return t(`systemSettings.resources.assets.${key}`) }
 function auditActionLabel(action: string) { return t(`systemSettings.resources.assets.${action === 'preview' ? 'auditPreview' : 'auditDownload'}`) }
-function openConsole() { if (result.value?.console_url) window.open(result.value.console_url, '_blank', 'noopener,noreferrer') }
 
 async function preview(row: SystemStorageAsset) {
   previewAsset.value = row; previewURL.value = ''; previewVisible.value = true; previewLoading.value = true
@@ -320,4 +338,29 @@ onMounted(() => { void Promise.all([load(), loadWorkspaces()]) })
 .audit-history { padding-top: 18px; border-top: 1px solid var(--border-light); }.audit-heading { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 12px; }.audit-heading h4, .audit-heading p { margin: 0; }.audit-heading h4 { color: var(--text-primary); font-size: 14px; }.audit-heading p { margin-top: 4px; color: var(--text-secondary); font-size: 12px; }
 @media (max-width: 1150px) { .asset-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }.asset-filters { grid-template-columns: 1fr 1fr 120px; } }
 @media (max-width: 760px) { .asset-topbar, .asset-summary, .asset-filters, .detail-overview, .workspace-usage-list { grid-template-columns: 1fr; }.workspace-usage-list button:nth-child(odd) { border-right: 0; }.workspace-usage-heading { flex-direction: column; }.detail-cover { width: 100%; }.asset-table-footer { align-items: flex-start; flex-direction: column; gap: 8px; padding-block: 10px; } }
+
+.asset-view-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:20px 0 16px; }
+.asset-view-heading h4 { margin:0; font-size:16px; color:var(--text-primary); }
+.asset-view-heading h4 span { margin-left:8px; font-size:12px; font-weight:500; color:var(--text-secondary); }
+.asset-gallery { display:grid; grid-template-columns:repeat(auto-fill,minmax(210px,1fr)); gap:18px; }
+.gallery-file { min-width:0; overflow:hidden; border:1px solid var(--border-light); border-radius:14px; background:var(--bg-primary); transition:box-shadow .2s,transform .2s; }
+.gallery-file:hover { transform:translateY(-2px); box-shadow:0 8px 24px rgba(20,35,60,.08); }
+.gallery-cover { position:relative; border:0; width:100%; height:148px; display:grid; place-items:center; padding:0; background:var(--bg-tertiary); color:var(--text-secondary); cursor:pointer; }
+.gallery-cover > svg { width:44px; height:44px; opacity:.65; }
+.gallery-cover .el-image { width:100%; height:100%; }
+.gallery-cover .el-tag { position:absolute; top:10px; right:10px; }
+.gallery-copy { display:grid; gap:8px; padding:16px; }
+.gallery-copy > small { color:var(--text-secondary); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.gallery-footer { display:flex; align-items:center; justify-content:space-between; color:var(--text-secondary); font-size:10px; }
+.asset-summary { gap:16px; }
+.asset-summary article { padding:22px; border-radius:14px; background:var(--bg-primary); border-top:3px solid var(--el-color-primary); gap:10px; }
+.asset-summary article:nth-child(2) { border-top-color:#35a89a; }
+.asset-summary article:nth-child(3) { border-top-color:#9a83da; }
+.asset-summary article:nth-child(4) { border-top-color:#d49b4f; }
+.asset-summary strong { font-size:30px; font-variant-numeric:tabular-nums; letter-spacing:-.8px; }
+.workspace-usage-card { border-radius:14px; background:var(--bg-primary); }
+.asset-table :deep(.el-table__cell) { padding:16px 0; }
+.asset-topbar :deep(.el-alert) { background:var(--bg-tertiary); }
+@media (prefers-reduced-motion:reduce) { .gallery-file { transition:none; } .gallery-file:hover { transform:none; } }
+@media (max-width:760px) { .asset-summary { grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; } .asset-summary article { padding:16px; } .asset-summary strong { font-size:26px; } }
 </style>

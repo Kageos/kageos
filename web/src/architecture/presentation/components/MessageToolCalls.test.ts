@@ -18,7 +18,6 @@ describe('MessageToolCalls', () => {
           OutputFilesDisplay: true,
           OutputDisplayFields: true,
           PrdPreview: true,
-          BuildWorkspaceDiagnosticsCard: true,
         },
       },
     })
@@ -48,12 +47,35 @@ describe('MessageToolCalls', () => {
           OutputFilesDisplay: true,
           OutputDisplayFields: true,
           PrdPreview: true,
-          BuildWorkspaceDiagnosticsCard: true,
         },
       },
     })
 
     expect((wrapper.get('details').element as HTMLDetailsElement).open).toBe(true)
     expect(wrapper.find('prd-preview-stub').exists()).toBe(true)
+  })
+
+  it('does not expand a dedicated card for build failures', () => {
+    const wrapper = mount(MessageToolCalls, {
+      props: {
+        toolCalls: [{
+          name: 'build_workspace',
+          status: 'error',
+          error: 'compile failed',
+          result_data: { kind: 'agent_app_build_failure' },
+        }],
+        fileGroups: [],
+      },
+      global: {
+        stubs: {
+          OutputFilesDisplay: true,
+          OutputDisplayFields: true,
+          PrdPreview: true,
+        },
+      },
+    })
+
+    expect((wrapper.get('details').element as HTMLDetailsElement).open).toBe(false)
+    expect(wrapper.find('.mini-msg-build-diagnostics').exists()).toBe(false)
   })
 })

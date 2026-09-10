@@ -3,12 +3,14 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
 
 	"github.com/kageos/kageos/core/hr-server/model"
 	"github.com/kageos/kageos/dto"
+	"github.com/kageos/kageos/pkg/mysqlstats"
 	"gorm.io/gorm"
 )
 
@@ -55,12 +57,24 @@ func (r *SystemResourceRepository) PruneHistory(runtimeCutoff, platformCutoff, c
 }
 
 func (r *SystemResourceRepository) CreateCapacity(snapshot dto.SystemResourceSnapshot) error {
+	snapshot.CollectedAt = snapshot.CollectedAt.UTC()
 	payload, err := json.Marshal(snapshot)
 	if err != nil {
 		return err
 	}
 	start, end := localDayBounds(snapshot.CollectedAt)
 	return r.db.Transaction(func(tx *gorm.DB) error {
+		if !snapshot.DatabaseInventoryComplete {
+			var previous model.SystemCapacitySnapshot
+			if err := tx.Where("collected_at >= ? AND collected_at < ?", start, end).First(&previous).Error; err == nil {
+				var saved dto.SystemResourceSnapshot
+				if json.Unmarshal([]byte(previous.PayloadJSON), &saved) == nil && saved.DatabaseInventoryComplete {
+					return nil
+				}
+			} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
+		}
 		if err := tx.Unscoped().Where("collected_at >= ? AND collected_at < ?", start, end).Delete(&model.SystemCapacitySnapshot{}).Error; err != nil {
 			return err
 		}
@@ -85,7 +99,7 @@ func (r *SystemResourceRepository) CapacityHistory(since time.Time, limit int) (
 		limit = 400
 	}
 	var rows []model.SystemCapacitySnapshot
-	if err := r.db.Where("collected_at >= ?", since).
+	if err := r.db.Where("collected_at >= ?", since.UTC()).
 		Order("collected_at ASC, id ASC").
 		Limit(limit).
 		Find(&rows).Error; err != nil {
@@ -177,6 +191,7 @@ func (r *SystemResourceRepository) CollectPlatformMetrics(now time.Time) (dto.Sy
 }
 
 func (r *SystemResourceRepository) CollectDatabaseSizes(ctx context.Context) (uint64, []dto.SystemDatabaseSize, bool) {
+	sourceID := ""
 	definitions := platformDatabaseDefinitions()
 	names := make([]string, 0, len(definitions))
 	for name := range definitions {
@@ -192,20 +207,38 @@ func (r *SystemResourceRepository) CollectDatabaseSizes(ctx context.Context) (ui
 	query := `SELECT s.schema_name AS name, COALESCE(SUM(t.data_length + t.index_length), 0) AS used_bytes
 		FROM information_schema.schemata s
 		LEFT JOIN information_schema.tables t ON t.table_schema = s.schema_name
-		WHERE s.schema_name IN ?
+		WHERE s.schema_name NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
 		GROUP BY s.schema_name`
-	if err := r.db.WithContext(ctx).Raw(query, names).Scan(&usage).Error; err != nil {
+	if err := mysqlstats.Fresh(ctx, r.db, func(db *gorm.DB) error {
+		if db.Dialector.Name() == "mysql" {
+			if err := db.Raw("SELECT @@server_uuid").Scan(&sourceID).Error; err != nil {
+				return err
+			}
+			if sourceID == "" {
+				return fmt.Errorf("database identity unavailable")
+			}
+		}
+		return db.Raw(query).Scan(&usage).Error
+	}); err != nil {
 		return 0, []dto.SystemDatabaseSize{}, false
 	}
 
 	usageByName := make(map[string]uint64, len(usage))
 	for _, item := range usage {
 		usageByName[item.Name] = item.UsedBytes
+		if _, known := definitions[item.Name]; !known {
+			names = append(names, item.Name)
+		}
 	}
 	databases := make([]dto.SystemDatabaseSize, 0, len(names))
 	var total uint64
 	for _, name := range names {
-		definition := definitions[name]
+		definition, known := definitions[name]
+		kind := "platform"
+		if !known {
+			kind = "unmanaged"
+			definition = platformDatabaseDefinition{service: "-", purpose: "unmanaged_database"}
+		}
 		usedBytes, exists := usageByName[name]
 		status := "active"
 		if !exists {
@@ -213,7 +246,7 @@ func (r *SystemResourceRepository) CollectDatabaseSizes(ctx context.Context) (ui
 		}
 		total += usedBytes
 		databases = append(databases, dto.SystemDatabaseSize{
-			Name: name, Kind: "platform", Owner: definition.service,
+			Name: name, SourceID: sourceID, Kind: kind, Owner: definition.service,
 			Directory: "platform", Purpose: definition.purpose, Status: status, UsedBytes: usedBytes,
 		})
 	}

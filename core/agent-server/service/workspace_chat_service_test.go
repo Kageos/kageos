@@ -1419,7 +1419,7 @@ func TestWorkspaceSessionAccessIsScopedToCurrentUser(t *testing.T) {
 	}
 }
 
-func TestPersistWorkspaceSessionInteractionStatusMarksPending(t *testing.T) {
+func TestPersistWorkspaceSessionInteractionStatusKeepsPRDAsOutput(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
@@ -1461,8 +1461,8 @@ func TestPersistWorkspaceSessionInteractionStatusMarksPending(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get updated session: %v", err)
 	}
-	if updated.Status != model.ChatSessionStatusPendingConfirmation {
-		t.Fatalf("status = %q, want %q", updated.Status, model.ChatSessionStatusPendingConfirmation)
+	if updated.Status != model.ChatSessionStatusOutput {
+		t.Fatalf("status = %q, want %q", updated.Status, model.ChatSessionStatusOutput)
 	}
 }
 
@@ -1690,7 +1690,7 @@ func TestRecordWorkspaceInteractionEventCreatesDisplayOnlyMessage(t *testing.T) 
 	if msg.Role != RoleUser || msg.ContextUsage != MessageContextDisplayOnly || msg.ArtifactKind != "workspace_interaction_event" {
 		t.Fatalf("unexpected audit message: %#v", msg)
 	}
-	if !strings.Contains(msg.DisplayContent, "确认 PRD") {
+	if !strings.Contains(msg.DisplayContent, "按此方案开始") {
 		t.Fatalf("display content should mention action, got %q", msg.DisplayContent)
 	}
 	updated, err := sessionRepo.GetBySessionID("interaction-event-session")

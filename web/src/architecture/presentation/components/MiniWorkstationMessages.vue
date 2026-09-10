@@ -241,17 +241,6 @@
                   :confirm-disabled="sending"
                   @confirm-prd="emit('confirm-prd', $event)"
                 />
-                <MiniWorkstationPendingActionBar
-                  v-for="(interaction, ii) in getInteractionCardsFromCalls(block.calls)"
-                  :key="`interaction-max-${interaction.id || ii}`"
-                  :interaction="interaction"
-                  :sending="sending"
-                  :readonly="!isActiveInteraction(interaction)"
-                  @view="emit('view', interaction)"
-                  @revise="emit('revise', { interaction, text: $event.text })"
-                  @cancel="emit('cancel', interaction)"
-                  @confirm="emit('confirm', interaction)"
-                />
               </template>
               <template v-else>
                 <div v-if="getVisibleToolCallsFromCalls(block.calls).length" class="mini-tools-block">
@@ -277,25 +266,9 @@
                   :key="`prd-${tc.name}-${pi}`"
                   :data="tc.result_data"
                   :confirm-disabled="sending"
+                  show-confirmation
                   @confirm="emit('confirm-prd', $event)"
                   class="mini-msg-prd-preview"
-                />
-                <BuildWorkspaceDiagnosticsCard
-                  v-for="(tc, bi) in getBuildWorkspaceFailureCallsFromCalls(block.calls)"
-                  :key="`build-failure-${tc.name}-${bi}`"
-                  :tool-call="tc"
-                  class="mini-msg-build-diagnostics"
-                />
-                <MiniWorkstationPendingActionBar
-                  v-for="(interaction, ii) in getInteractionCardsFromCalls(block.calls)"
-                  :key="`interaction-${interaction.id || ii}`"
-                  :interaction="interaction"
-                  :sending="sending"
-                  :readonly="!isActiveInteraction(interaction)"
-                  @view="emit('view', interaction)"
-                  @revise="emit('revise', { interaction, text: $event.text })"
-                  @cancel="emit('cancel', interaction)"
-                  @confirm="emit('confirm', interaction)"
                 />
                 <OutputFilesDisplay
                   v-if="getFileGroupsFromCalls(block.calls).length"
@@ -330,17 +303,6 @@
               :confirm-disabled="sending"
               @confirm-prd="emit('confirm-prd', $event)"
             />
-            <MiniWorkstationPendingActionBar
-              v-for="(interaction, ii) in getInteractionCardsFromCalls(msg.tool_calls)"
-              :key="`msg-interaction-max-${interaction.id || ii}`"
-              :interaction="interaction"
-              :sending="sending"
-              :readonly="!isActiveInteraction(interaction)"
-              @view="emit('view', interaction)"
-              @revise="emit('revise', { interaction, text: $event.text })"
-              @cancel="emit('cancel', interaction)"
-              @confirm="emit('confirm', interaction)"
-            />
           </template>
           <template v-else-if="msg.tool_calls?.length">
             <div v-if="getVisibleToolCallsFromCalls(msg.tool_calls).length" class="mini-tools-block">
@@ -366,25 +328,9 @@
               :key="`msg-prd-${tc.name}-${pi}`"
               :data="tc.result_data"
               :confirm-disabled="sending"
+              show-confirmation
               @confirm="emit('confirm-prd', $event)"
               class="mini-msg-prd-preview"
-            />
-            <BuildWorkspaceDiagnosticsCard
-              v-for="(tc, bi) in getBuildWorkspaceFailureCallsFromCalls(msg.tool_calls)"
-              :key="`msg-build-failure-${tc.name}-${bi}`"
-              :tool-call="tc"
-              class="mini-msg-build-diagnostics"
-            />
-            <MiniWorkstationPendingActionBar
-              v-for="(interaction, ii) in getInteractionCardsFromCalls(msg.tool_calls)"
-              :key="`msg-interaction-${interaction.id || ii}`"
-              :interaction="interaction"
-              :sending="sending"
-              :readonly="!isActiveInteraction(interaction)"
-              @view="emit('view', interaction)"
-              @revise="emit('revise', { interaction, text: $event.text })"
-              @cancel="emit('cancel', interaction)"
-              @confirm="emit('confirm', interaction)"
             />
             <OutputFilesDisplay
               v-if="getFileGroupsFromCalls(msg.tool_calls).length"
@@ -428,8 +374,6 @@ import ModelContextPlanCard from './ModelContextPlanCard.vue'
 import OutputDisplayFields from './OutputDisplayFields.vue'
 import OutputFilesDisplay from './OutputFilesDisplay.vue'
 import PrdPreview from './PrdPreview.vue'
-import BuildWorkspaceDiagnosticsCard from './BuildWorkspaceDiagnosticsCard.vue'
-import MiniWorkstationPendingActionBar from './MiniWorkstationPendingActionBar.vue'
 import MiniWorkstationResourceIdentity from './MiniWorkstationResourceIdentity.vue'
 import WorkspaceResourceHoverCard from './WorkspaceResourceHoverCard.vue'
 import UserDisplay from '@/architecture/presentation/shared/components/UserDisplay.vue'
@@ -589,8 +533,6 @@ function hasTechnicalActivity(message: ChatMessage, calls = getAllToolCallsFromM
 function hasImportantToolSurface(calls: ChatMessageToolCall[]): boolean {
   if (!calls.length) return false
   return getPrdCallsFromCalls(calls).length > 0 ||
-    getBuildWorkspaceFailureCallsFromCalls(calls).length > 0 ||
-    getInteractionCardsFromCalls(calls).length > 0 ||
     props.getFileGroupsFromCalls(calls).length > 0 ||
     props.getDisplayFieldsFromCalls(calls).length > 0
 }
@@ -899,89 +841,6 @@ function getActivityEntryRoundLabel(entry: ActivityEntry): string {
   return `消息第 ${entry.index + 1} 条`
 }
 
-function getBuildWorkspaceFailureCallsFromCalls(calls: ChatMessageToolCall[]): ChatMessageToolCall[] {
-  return calls.filter((call) =>
-    call.name === 'build_workspace' &&
-    call.result_data != null &&
-    typeof call.result_data === 'object' &&
-    (call.result_data as { kind?: string }).kind === 'agent_app_build_failure'
-  )
-}
-
-type StageInteractionArtifact = Record<string, unknown> & {
-  kind?: string
-  interaction?: Partial<WorkspaceInteraction>
-}
-
-function getInteractionCardsFromCalls(calls: ChatMessageToolCall[]): WorkspaceInteraction[] {
-  const interactions: WorkspaceInteraction[] = []
-  for (const call of calls) {
-    const interaction = buildWorkspaceInteractionFromArtifact(call.result_data)
-    // PRD confirmation is the only user-facing stage interaction. Build errors
-    // and every other process state continue automatically without a pause card.
-    if (interaction?.card_type === 'prd_confirmation' && interaction.artifact_kind === 'agent_app_prd') {
-      interactions.push(interaction)
-    }
-  }
-  return interactions
-}
-
-function buildWorkspaceInteractionFromArtifact(value: unknown): WorkspaceInteraction | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
-  const artifact = value as StageInteractionArtifact
-  const rawInteraction = artifact.interaction
-  if (!rawInteraction || typeof rawInteraction !== 'object') return null
-  const status = typeof rawInteraction.status === 'string' ? rawInteraction.status.trim() : ''
-  if (!status.startsWith('pending_')) return null
-  const cardType = typeof rawInteraction.card_type === 'string' ? rawInteraction.card_type : fallbackCardType(artifact.kind, status)
-  return {
-    id: typeof rawInteraction.id === 'string' ? rawInteraction.id : getStageArtifactKey(artifact),
-    card_type: cardType,
-    artifact_kind: typeof rawInteraction.artifact_kind === 'string' ? rawInteraction.artifact_kind : artifact.kind,
-    status,
-    blocking: typeof rawInteraction.blocking === 'boolean' ? rawInteraction.blocking : true,
-    title: typeof rawInteraction.title === 'string' ? rawInteraction.title : fallbackInteractionTitle(cardType),
-    description: typeof rawInteraction.description === 'string' ? rawInteraction.description : undefined,
-    help_text: typeof rawInteraction.help_text === 'string' ? rawInteraction.help_text : undefined,
-    view_text: typeof rawInteraction.view_text === 'string' ? rawInteraction.view_text : undefined,
-    confirm_text: typeof rawInteraction.confirm_text === 'string' ? rawInteraction.confirm_text : undefined,
-    revise_text: typeof rawInteraction.revise_text === 'string' ? rawInteraction.revise_text : undefined,
-    cancel_text: typeof rawInteraction.cancel_text === 'string' ? rawInteraction.cancel_text : undefined,
-    target_role_on_confirm: typeof rawInteraction.target_role_on_confirm === 'string' ? rawInteraction.target_role_on_confirm : undefined,
-    allowed_actions: Array.isArray(rawInteraction.allowed_actions) ? rawInteraction.allowed_actions.map(String) : undefined,
-    artifact
-  }
-}
-
-function isActiveInteraction(interaction: WorkspaceInteraction): boolean {
-  if (!props.pendingInteraction) return false
-  return getInteractionKey(interaction) === getInteractionKey(props.pendingInteraction)
-}
-
-function getInteractionKey(interaction: WorkspaceInteraction): string {
-  return interaction.id || getStageArtifactKey(interaction.artifact) || `${interaction.status}:${interaction.card_type}`
-}
-
-function getStageArtifactKey(artifact: unknown): string {
-  try {
-    return JSON.stringify(artifact)
-  } catch {
-    return String(artifact)
-  }
-}
-
-function fallbackCardType(kind: unknown, status: string): string {
-  if (kind === 'agent_app_build_failure' || status === 'pending_build_repair') return 'build_repair'
-  if (kind === 'agent_app_prd' || status === 'pending_confirmation') return 'prd_confirmation'
-  return 'stage_confirmation'
-}
-
-function fallbackInteractionTitle(cardType: string): string {
-  if (cardType === 'build_repair') return t('miniWorkstation.buildRepairTitle')
-  if (cardType === 'prd_confirmation') return t('miniWorkstation.interactionPrdTitle')
-  return t('miniWorkstation.interactionWaitingTitle')
-}
-
 function getAssistantModelLabel(message: ChatMessage): string {
   if (message.llm_config_name) return message.llm_config_name
   const provider = (message.llm_provider || '').trim()
@@ -1048,6 +907,8 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .mini-ws-empty {
+  box-sizing: border-box;
+  width: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1057,6 +918,7 @@ onBeforeUnmount(() => {
   font-size: 13px;
   letter-spacing: 0;
   text-transform: none;
+  text-align: center;
 }
 
 .mini-msg {
@@ -1593,18 +1455,6 @@ onBeforeUnmount(() => {
 
 .mini-msg-prd-preview {
   margin: 6px 0;
-}
-.mini-msg-build-diagnostics {
-  --el-text-color-primary: var(--text-primary);
-  --el-text-color-regular: var(--text-primary);
-  --el-text-color-secondary: var(--text-secondary);
-  --el-border-color-lighter: rgba(248, 113, 113, 0.28);
-  --el-border-color-extra-light: rgba(248, 113, 113, 0.14);
-  --el-fill-color-blank: var(--bg-primary);
-  --el-fill-color-lighter: var(--bg-tertiary);
-
-  margin: 6px 0;
-  border-radius: 8px;
 }
 .mini-msg-prd-preview :deep(.prd-preview) {
   --prd-bg: var(--bg-primary);

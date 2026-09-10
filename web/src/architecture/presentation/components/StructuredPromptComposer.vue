@@ -62,6 +62,9 @@
       :data-placeholder="placeholder"
       :data-testid="editorTestId"
       :style="editorStyle"
+      role="textbox"
+      aria-multiline="true"
+      :aria-label="placeholder"
       spellcheck="false"
       @input="handleEditorInput"
       @paste="handlePaste"
@@ -162,6 +165,16 @@
           <span class="spc-mention-trigger">{{ mentionQuery?.trigger }}</span>
           <span>{{ mentionModeLabel }}</span>
         </div>
+        <template v-if="mentionQuery?.kind === 'resource'">
+          <div class="spc-resource-scopes" aria-label="资源范围">
+            <button type="button" :disabled="!currentDirectory" :aria-pressed="resourceScope === 'current' && !!currentDirectory" @click="changeResourceFilter('current', resourceType)">当前目录</button>
+            <button type="button" :aria-pressed="resourceScope === 'other' || !currentDirectory" @click="changeResourceFilter('other', resourceType)">{{ currentDirectory ? '其他目录' : '全部目录' }}</button>
+          </div>
+          <div class="spc-resource-location" :title="currentDirectory">{{ resourceScope === 'current' && currentDirectory ? `${currentDirectory} · 含子目录` : currentDirectory ? '搜索有权访问的其他目录资源' : '搜索所有有权访问的目录资源' }}</div>
+          <div class="spc-resource-tabs" role="tablist" aria-label="资源类型">
+            <button v-for="item in resourceTypes" :key="item.value" type="button" role="tab" :aria-selected="resourceType === item.value" @click="changeResourceFilter(resourceScope, item.value)">{{ item.label }}</button>
+          </div>
+        </template>
         <div v-if="mentionLoading" class="spc-mention-state">搜索中...</div>
         <div v-else-if="mentionOptions.length === 0" class="spc-mention-state">
           {{ mentionEmptyText }}
@@ -202,24 +215,47 @@
               <span class="spc-mention-title-row">
                 <span class="spc-mention-title" :title="option.label">{{ option.label }}</span>
               </span>
-              <span v-if="option.description" class="spc-mention-desc" :title="option.description">
+              <span v-if="option.kind === 'resource'" class="spc-mention-desc spc-mention-purpose">{{ option.resourceMeta?.description || '尚未填写用途说明' }}</span>
+              <span v-if="option.kind === 'resource'" class="spc-mention-desc" :title="option.value">{{ option.value }}</span>
+              <span v-else-if="option.description" class="spc-mention-desc" :title="option.description">
                 {{ option.description }}
               </span>
             </span>
             <span class="spc-mention-type">{{ option.typeLabel }}</span>
           </button>
         </div>
+        <div class="spc-mention-footer">
+          <span>↑ ↓ 选择 · Enter 插入 · Esc 关闭</span>
+          <button v-if="mentionHasMore || mentionSearchError" type="button" :disabled="mentionLoading" @click="loadMoreMentions">{{ mentionSearchError ? '重试' : '加载更多' }}</button>
+        </div>
       </div>
     </el-popover>
 
+    <el-popover
+      :visible="!!activeInfoCard"
+      trigger="manual"
+      virtual-triggering
+      :virtual-ref="infoCardAnchor || undefined"
+      placement="top-start"
+      :offset="8"
+      :width="360"
+      :show-arrow="true"
+      :teleported="true"
+      :persistent="false"
+      popper-class="spc-info-popover"
+    >
     <div
       v-if="activeInfoCard"
+      ref="infoCardRef"
       class="spc-info-card"
-      :style="{ left: `${activeInfoCard.left}px`, top: `${activeInfoCard.top}px` }"
       data-testid="structured-prompt-info-card"
-      @mousedown.stop
+      role="dialog"
+      :aria-label="`${activeInfoCard.title}的信息`"
+      @mousedown.stop.prevent
       @click.stop
+      @keydown.esc.stop="closeInfoCard"
     >
+      <button type="button" class="spc-info-close" aria-label="关闭信息卡片" @click="closeInfoCard">×</button>
       <div class="spc-info-head">
         <span :class="['spc-info-icon', `is-${activeInfoCard.kind}`, activeInfoCard.iconClass]">
           <UserAvatar
@@ -253,6 +289,7 @@
       </div>
       <code class="spc-info-raw">{{ activeInfoCard.raw }}</code>
     </div>
+    </el-popover>
   </div>
 </template>
 
@@ -260,10 +297,12 @@
 import { computed, defineComponent, h, markRaw, nextTick, onBeforeUnmount, onMounted, ref, watch, type Component } from 'vue'
 import { Document, EditPen, View } from '@element-plus/icons-vue'
 import type { UserInfo } from '@/architecture/domain/types'
+import { getUserInfo } from '@/architecture/presentation/context/api/auth'
 import { getUsersByUsernames, searchUsersFuzzy } from '@/architecture/presentation/context/api/user'
 import {
   getServiceTreeDetail,
   searchResources,
+  searchFunctions,
   type ResourceSearchResult,
   type ServiceTreeDetailResp,
 } from '@/architecture/presentation/context/api/service-tree'
@@ -272,6 +311,7 @@ import ChartIcon from '@/architecture/presentation/shared/components/icons/Chart
 import TableIcon from '@/architecture/presentation/shared/components/icons/TableIcon.vue'
 import {
   isWorkspaceToolResourcePath,
+  insertWorkspaceResourceTokensAtOffset,
   parseWorkspaceInvocationBlocks,
   parseWorkspacePromptSegments,
   resolveWorkspaceResourcePath,
@@ -354,8 +394,6 @@ interface PromptInfoCard {
   subtitle: string
   description: string
   raw: string
-  left: number
-  top: number
   avatar?: string
   iconSrc?: string
   iconComponent?: Component
@@ -450,7 +488,34 @@ const mode = ref<ComposerMode>(props.readonlyPreview ? 'preview' : 'edit')
 const focused = ref(false)
 const currentText = ref(props.modelValue)
 const mentionQuery = ref<MiniComposerMentionQuery | null>(null)
-const mentionOptions = ref<StructuredMentionOption[]>([])
+const rawMentionOptions = ref<StructuredMentionOption[]>([])
+const resourceScope = ref<'current' | 'other'>('current')
+const resourceType = ref('all')
+const resourceTypes = [
+  { value: 'all', label: '全部' }, { value: 'docs', label: '文档' },
+  { value: 'package', label: '目录' }, { value: 'table', label: '数据表' },
+  { value: 'form', label: '表单' }, { value: 'chart', label: '图表' },
+  { value: 'other', label: '其他' },
+]
+const currentDirectory = computed(() => {
+  const path = props.fullCodePath.replace(/\/$/, '')
+  return /\.(?:docs|table|form|chart|function|workflow|page)$/.test(path) ? path.slice(0, path.lastIndexOf('/')) : path
+})
+const mentionSearchError = ref(false)
+const mentionHasMore = ref(false)
+let mentionPage = 1
+let mentionRetryPage = 1
+const mentionOptions = computed(() => rawMentionOptions.value.filter(option => {
+  if (option.kind === 'user') return true
+  const local = !!currentDirectory.value && (option.value === currentDirectory.value || option.value.startsWith(`${currentDirectory.value}/`))
+  if (currentDirectory.value && (resourceScope.value === 'current' ? !local : local)) return false
+  const kind = option.resourceType === 'function'
+    ? (option.resourceMeta?.templateType || option.value.split('.').pop() || '')
+    : option.resourceType
+  return resourceType.value === 'all' || (resourceType.value === 'other'
+    ? !['docs', 'package', 'table', 'form', 'chart'].includes(kind || '')
+    : kind === resourceType.value)
+}))
 const mentionLoading = ref(false)
 const highlightedMentionIndex = ref(0)
 const mentionAnchorRect = ref<DOMRect>(createVirtualRect())
@@ -458,6 +523,8 @@ const composing = ref(false)
 const userMetaByUsername = ref<Record<string, PromptUserMeta>>({ system: SYSTEM_USER_META })
 const resourceMetaByPath = ref<Record<string, PromptResourceMeta>>({})
 const activeInfoCard = ref<PromptInfoCard | null>(null)
+const infoCardRef = ref<HTMLElement | null>(null)
+const infoCardAnchor = ref<HTMLElement | null>(null)
 let renderTimer: ReturnType<typeof setTimeout> | null = null
 let mentionSearchTimer: ReturnType<typeof setTimeout> | null = null
 let mentionCloseTimer: ReturnType<typeof setTimeout> | null = null
@@ -468,6 +535,7 @@ let pendingMentionCommitKey = ''
 let metadataHydrateSeq = 0
 let rendering = false
 let lastCompositionEndAt = 0
+let lastCaretOffset = props.modelValue.length
 
 const structuredSegments = computed(() => parseStructuredPromptSegments(currentText.value))
 const resourceSegments = computed(() => structuredSegments.value.filter((segment): segment is StructuredPromptResourceSegment => segment.type === 'resource'))
@@ -476,7 +544,7 @@ const mentionPanelOpen = computed(() => props.enableMentions && mode.value === '
 const mentionPopoverPlacement = computed(() => props.mentionPanelPlacement === 'above' ? 'top-start' : 'bottom-start')
 const mentionPopoverWidth = computed(() => {
   const rootWidth = rootRef.value?.getBoundingClientRect().width || 360
-  return Math.max(300, Math.min(rootWidth, 520))
+  return mentionQuery.value?.kind === 'resource' ? Math.min(720, window.innerWidth - 24) : Math.max(300, Math.min(rootWidth, 520))
 })
 const mentionVirtualRef = {
   getBoundingClientRect: () => mentionAnchorRect.value,
@@ -484,13 +552,13 @@ const mentionVirtualRef = {
     return editorRef.value || rootRef.value || undefined
   },
 }
-const mentionModeLabel = computed(() => mentionQuery.value?.kind === 'user' ? '选择用户' : '选择服务目录或工具')
+const mentionModeLabel = computed(() => mentionQuery.value?.kind === 'user' ? '选择用户' : '选择资源')
 const mentionEmptyText = computed(() => {
   const query = mentionQuery.value
   if (!query) return ''
-  if (!query.query.trim()) {
-    return query.kind === 'user' ? '继续输入用户名或姓名' : '继续输入服务目录、函数或工具名称'
-  }
+  if (mentionSearchError.value) return '加载失败，请重试'
+  if (mentionHasMore.value) return '已加载的资源中暂无匹配项，可加载更多或继续输入名称搜索'
+  if (!query.query.trim() && query.kind === 'user') return '未获取到当前用户，请输入用户名搜索'
   return query.kind === 'user' ? '没有匹配的用户' : '没有匹配的资源'
 })
 const editorStyle = computed(() => {
@@ -512,7 +580,7 @@ watch(() => props.modelValue, (value) => {
   const editor = editorRef.value
   if (!editor) return
   if (serializeEditorContent(editor) === value) return
-  renderEditorContent(value)
+  renderEditorContentPreservingCaret(value)
   scheduleMetadataHydration()
 })
 
@@ -566,7 +634,10 @@ function handleEditorInput(event?: Event) {
   if (composing.value || isComposingInputEvent(event)) return
   const editor = editorRef.value
   if (!editor) return
+  syncTrailingLineBreak(editor)
   commitText(serializeEditorContent(editor))
+  rememberCaretPosition(editor)
+  keepCaretVisible(editor)
   closeInfoCard()
   updateMentionFromEditor()
   scheduleTokenRender()
@@ -581,6 +652,12 @@ function handlePaste(event: ClipboardEvent) {
 }
 
 function handleEditorKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape' && activeInfoCard.value) {
+    event.preventDefault()
+    event.stopPropagation()
+    closeInfoCard()
+    return
+  }
   if (props.disabled) {
     return
   }
@@ -654,6 +731,7 @@ function handleEditorCursorChange(event?: Event) {
   ) {
     return
   }
+  rememberCaretPosition()
   updateMentionFromEditor()
 }
 
@@ -684,6 +762,7 @@ function handleFocus() {
 }
 
 function handleBlur() {
+  rememberCaretPosition()
   focused.value = false
   scheduleMentionClose()
   renderEditorContent(currentText.value)
@@ -696,7 +775,7 @@ function handleBlur() {
 function handleRootFocusOut(event: FocusEvent) {
   const root = rootRef.value
   const nextTarget = event.relatedTarget
-  if (root && nextTarget instanceof Node && root.contains(nextTarget)) {
+  if (nextTarget instanceof Node && (root?.contains(nextTarget) || infoCardRef.value?.contains(nextTarget))) {
     return
   }
   closeInfoCard()
@@ -705,7 +784,7 @@ function handleRootFocusOut(event: FocusEvent) {
 function isFocusInsideRoot() {
   const root = rootRef.value
   const active = document.activeElement
-  return !!root && active instanceof Node && root.contains(active)
+  return active instanceof Node && (!!root?.contains(active) || !!infoCardRef.value?.contains(active))
 }
 
 function onCompositionStart() {
@@ -760,15 +839,16 @@ function scheduleTokenRender() {
     if (!editor || focused.value === false) return
     if (composing.value) return
     if (mentionQuery.value) return
+    if (window.getSelection()?.isCollapsed === false) return
     const offset = getCaretTextOffset(editor)
     const text = serializeEditorContent(editor)
     currentText.value = text
     if (!needsTokenRender(editor, text)) return
+    const scrollTop = editor.scrollTop
     renderEditorContent(text)
-    void nextTick(() => {
-      restoreCaretTextOffset(editor, offset)
-      updateMentionFromEditor()
-    })
+    restoreCaretTextOffset(editor, offset)
+    editor.scrollTop = scrollTop
+    updateMentionFromEditor()
   }, 260)
 }
 
@@ -796,17 +876,53 @@ function renderEditorContent(text: string) {
 
   rendering = true
   editor.replaceChildren(...buildEditorNodes(text))
+  syncTrailingLineBreak(editor)
   rendering = false
 }
 
 function renderEditorContentPreservingCaret(text: string) {
   const editor = editorRef.value
   if (!editor) return
-  const offset = focused.value ? getCaretTextOffset(editor) : null
+  const offset = focused.value ? getActiveOrRememberedCaretOffset(editor, text.length) : null
+  // Do not destroy a non-collapsed selection or an IME composition for display-only metadata.
+  if (composing.value) return
+  const scrollTop = editor.scrollTop
+  const selection = window.getSelection()
+  if (focused.value && selection && !selection.isCollapsed) return
   renderEditorContent(text)
   if (offset !== null) {
-    void nextTick(() => restoreCaretTextOffset(editor, offset))
+    lastCaretOffset = offset
+    restoreCaretTextOffset(editor, offset)
   }
+  editor.scrollTop = scrollTop
+}
+
+// A trailing newline needs a final BR for the browser to paint its empty line/caret.
+// It is presentation-only and must never become part of the prompt.
+function keepCaretVisible(editor: HTMLElement) {
+  const selection = window.getSelection()
+  if (!selection?.rangeCount || !selection.isCollapsed) return
+  const range = selection.getRangeAt(0)
+  if (!isRangeInside(editor, range)) return
+  let rect = Array.from(range.getClientRects?.() || []).find(rect => rect.height > 0)
+  if (!rect && getCaretTextOffset(editor) === serializeEditorContent(editor).length) {
+    rect = editor.querySelector('[data-caret-trailing-break]')?.getBoundingClientRect()
+  }
+  if (!rect) return
+  const bounds = editor.getBoundingClientRect()
+  if (rect.bottom > bounds.bottom - 4) editor.scrollTop += rect.bottom - bounds.bottom + 4
+  else if (rect.top < bounds.top + 4) editor.scrollTop -= bounds.top + 4 - rect.top
+}
+
+function syncTrailingLineBreak(editor: HTMLElement) {
+  const marker = editor.querySelector('[data-caret-trailing-break]')
+  const needsBreak = serializeEditorContent(editor).endsWith('\n')
+  if (!needsBreak) { marker?.remove(); return }
+  if (marker === editor.lastChild) return
+  marker?.remove()
+  const br = document.createElement('br')
+  br.dataset.caretTrailingBreak = 'true'
+  editor.appendChild(br)
 }
 
 function buildEditorNodes(text: string): Node[] {
@@ -876,21 +992,28 @@ function serializeNode(node: Node): string {
   return node.textContent || ''
 }
 
-function insertTextAtCaret(text: string) {
+function insertTextAtCaret(text: string, preferredOffset?: number) {
   if (props.disabled) return
   mode.value = 'edit'
   const editor = editorRef.value
   if (!editor) return
+  const source = serializeEditorContent(editor)
+  const fallbackOffset = Math.min(preferredOffset ?? lastCaretOffset, source.length)
   editor.focus()
 
   const selection = window.getSelection()
   const range = selection?.rangeCount ? selection.getRangeAt(0) : null
   if (!selection || !range || !isRangeInside(editor, range)) {
-    editor.appendChild(document.createTextNode(text))
-    commitText(serializeEditorContent(editor))
-    restoreCaretTextOffset(editor, currentText.value.length)
-    updateMentionFromEditor()
-    scheduleTokenRender()
+    const value = `${source.slice(0, fallbackOffset)}${text}${source.slice(fallbackOffset)}`
+    lastCaretOffset = fallbackOffset + text.length
+    commitText(value)
+    renderEditorContent(value)
+    void nextTick(() => {
+      editor.focus()
+      restoreCaretTextOffset(editor, lastCaretOffset)
+      updateMentionFromEditor()
+      scheduleTokenRender()
+    })
     return
   }
 
@@ -901,7 +1024,18 @@ function insertTextAtCaret(text: string) {
   range.collapse(true)
   selection.removeAllRanges()
   selection.addRange(range)
+  lastCaretOffset = getCaretTextOffset(editor)
   handleEditorInput()
+}
+
+function insertWorkspaceResources(paths: string[]) {
+  if (props.disabled || paths.length === 0) return
+  const editor = editorRef.value
+  const source = editor ? serializeEditorContent(editor) : currentText.value
+  const offset = editor ? getActiveOrRememberedCaretOffset(editor, source.length) : source.length
+  const result = insertWorkspaceResourceTokensAtOffset(source, paths, offset, props.fullCodePath)
+  if (!result.insertedText) return
+  insertTextAtCaret(result.insertedText, offset)
 }
 
 function isRangeInside(root: HTMLElement, range: Range) {
@@ -921,6 +1055,24 @@ function getCaretTextOffset(root: HTMLElement): number {
   const container = document.createElement('div')
   container.appendChild(fragment)
   return serializeEditorContent(container).length
+}
+
+function getActiveOrRememberedCaretOffset(root: HTMLElement, textLength: number) {
+  const selection = window.getSelection()
+  const range = selection?.rangeCount ? selection.getRangeAt(0) : null
+  if (range && isRangeInside(root, range)) {
+    return Math.min(getCaretTextOffset(root), textLength)
+  }
+  return Math.min(lastCaretOffset, textLength)
+}
+
+function rememberCaretPosition(root = editorRef.value) {
+  if (!root) return
+  const selection = window.getSelection()
+  const range = selection?.rangeCount ? selection.getRangeAt(0) : null
+  if (range && isRangeInside(root, range)) {
+    lastCaretOffset = getCaretTextOffset(root)
+  }
 }
 
 function createVirtualRect(left = 0, top = 0, width = 1, height = 24): DOMRect {
@@ -1036,6 +1188,10 @@ function updateMentionFromEditor() {
   const query = findMiniComposerMentionQuery(text, getCaretTextOffset(editor))
   const previousSearchKey = mentionQuery.value ? getMentionSearchKey(mentionQuery.value) : ''
   const nextSearchKey = query ? getMentionSearchKey(query) : ''
+  if (query?.kind === 'resource' && mentionQuery.value?.kind !== 'resource') {
+    resourceScope.value = 'current'
+    resourceType.value = 'all'
+  }
   if (query) {
     mentionAnchorRect.value = getMentionAnchorRect(editor)
   }
@@ -1045,13 +1201,6 @@ function updateMentionFromEditor() {
   }
 
   if (!query) {
-    pendingMentionCommitKey = ''
-    resetMentionSearch()
-    return
-  }
-
-  const keyword = query.query.trim()
-  if (!keyword) {
     pendingMentionCommitKey = ''
     resetMentionSearch()
     return
@@ -1069,11 +1218,13 @@ function resetMentionSearch() {
   activeMentionSearchKey = ''
   pendingMentionCommitKey = ''
   mentionLoading.value = false
-  mentionOptions.value = []
+  mentionHasMore.value = false
+  mentionSearchError.value = false
+  rawMentionOptions.value = []
 }
 
 function getMentionSearchKey(query: MiniComposerMentionQuery) {
-  return `${query.kind}:${query.query.trim()}`
+  return `${query.kind}:${query.query.trim()}:${query.kind === 'resource' ? `${currentDirectory.value}:${resourceScope.value}:${resourceType.value}` : ''}`
 }
 
 function scheduleMentionSearch(query: MiniComposerMentionQuery) {
@@ -1087,34 +1238,53 @@ function scheduleMentionSearch(query: MiniComposerMentionQuery) {
     clearTimeout(mentionSearchTimer)
   }
   mentionLoading.value = true
-  mentionOptions.value = []
+  mentionHasMore.value = false
+  mentionPage = 1
+  pendingMentionCommitKey = ''
+  rawMentionOptions.value = []
   mentionSearchTimer = setTimeout(() => {
     void runMentionSearch(query, searchKey)
   }, 220)
 }
 
-async function runMentionSearch(query: MiniComposerMentionQuery, searchKey: string) {
+async function runMentionSearch(query: MiniComposerMentionQuery, searchKey: string, page = 1) {
   const currentSeq = ++mentionSearchSeq
   mentionLoading.value = true
+  mentionSearchError.value = false
 
   try {
     if (query.kind === 'user') {
-      const response = await searchUsersFuzzy(query.query.trim(), 8)
+      const keyword = query.query.trim()
+      const users = keyword ? (await searchUsersFuzzy(keyword, 8)).users || [] : [await getUserInfo()]
       if (currentSeq !== mentionSearchSeq || activeMentionSearchKey !== searchKey) return
-      mentionOptions.value = (response.users || []).map(mapUserMentionOption)
+      rawMentionOptions.value = users.filter(user => !!user?.username).map(user => ({
+        ...mapUserMentionOption(user),
+        ...(!keyword ? { typeLabel: '我自己' } : {}),
+      }))
     } else {
-      const response = await searchResources({
-        keyword: query.query.trim(),
-        resource_type: 'all',
-        page: 1,
-        page_size: 8,
-      })
+      const scopePath = resourceScope.value === 'current' ? currentDirectory.value : ''
+      const functionType = ['table', 'form', 'chart'].includes(resourceType.value)
+      const response = functionType
+        ? await searchFunctions({ user: '', app: '', keyword: query.query.trim(), full_code_path: scopePath,
+          template_type: resourceType.value, page, page_size: 100 }).then(result => ({
+          items: (result.functions || []).map(item => ({ ...item, type: 'function' as const })),
+        }))
+        : await searchResources({
+          keyword: query.query.trim(),
+          full_code_path: scopePath,
+          resource_type: resourceType.value === 'docs' || resourceType.value === 'package' ? resourceType.value : resourceType.value === 'all' ? 'all' : 'function',
+          page, page_size: 100,
+        })
       if (currentSeq !== mentionSearchSeq || activeMentionSearchKey !== searchKey) return
-      mentionOptions.value = (response.items || []).map(mapResourceMentionOption)
+      const options = (response.items || []).map(mapResourceMentionOption)
+      rawMentionOptions.value = page === 1 ? options : Array.from(new Map([...rawMentionOptions.value, ...options].map(option => [option.key, option])).values())
+      mentionPage = page
+      mentionHasMore.value = (response.items || []).length === 100
     }
   } catch {
     if (currentSeq === mentionSearchSeq && activeMentionSearchKey === searchKey) {
-      mentionOptions.value = []
+      mentionSearchError.value = true
+      mentionRetryPage = page
     }
   } finally {
     if (currentSeq === mentionSearchSeq && activeMentionSearchKey === searchKey) {
@@ -1125,9 +1295,25 @@ async function runMentionSearch(query: MiniComposerMentionQuery, searchKey: stri
   }
 }
 
+function changeResourceFilter(scope: 'current' | 'other', type: string) {
+  resourceScope.value = scope
+  resourceType.value = type
+  highlightedMentionIndex.value = 0
+  if (mentionQuery.value) scheduleMentionSearch(mentionQuery.value)
+}
+
+function loadMoreMentions() {
+  if (!mentionQuery.value || mentionLoading.value) return
+  void runMentionSearch(mentionQuery.value, getMentionSearchKey(mentionQuery.value), mentionSearchError.value ? mentionRetryPage : mentionPage + 1)
+}
+
+watch(currentDirectory, () => {
+  if (mentionQuery.value?.kind === 'resource') changeResourceFilter('current', 'all')
+})
+
 function queueMentionCommit() {
   const query = mentionQuery.value
-  if (!query || !query.query.trim()) {
+  if (!query) {
     return false
   }
   pendingMentionCommitKey = getMentionSearchKey(query)
@@ -1136,7 +1322,7 @@ function queueMentionCommit() {
 
 function commitMentionSelectionOrQueue() {
   const query = mentionQuery.value
-  if (!query || !query.query.trim()) {
+  if (!query) {
     return false
   }
   const option = mentionOptions.value[highlightedMentionIndex.value] || mentionOptions.value[0]
@@ -1366,7 +1552,7 @@ async function hydrateUserMetadata(usernames: string[], seq: number) {
       }
     })
     userMetaByUsername.value = next
-    renderEditorContentPreservingCaret(currentText.value)
+    if (!focused.value) renderEditorContentPreservingCaret(currentText.value)
   } catch {
     // Metadata is display-only. Keep raw tokens if lookup fails.
   }
@@ -1392,7 +1578,7 @@ async function hydrateResourceMetadata(paths: string[], seq: number) {
       next[meta.path] = meta
     })
     resourceMetaByPath.value = next
-    renderEditorContentPreservingCaret(currentText.value)
+    if (!focused.value) renderEditorContentPreservingCaret(currentText.value)
   } catch {
     // Metadata is display-only. Keep raw tokens if lookup fails.
   }
@@ -1476,6 +1662,7 @@ function normalizeResourcePathForMeta(pathOrToken: string) {
 }
 
 function openInfoCardForUser(username: string, event: MouseEvent | KeyboardEvent) {
+  setInfoCardAnchor(event)
   const normalized = normalizeMentionUsername(username)
   const meta = getUserMeta(normalized) || {
     username: normalized,
@@ -1490,46 +1677,47 @@ function openInfoCardForUser(username: string, event: MouseEvent | KeyboardEvent
     description: meta.description || '',
     raw: `@${normalized}`,
     avatar: meta.avatar,
-    ...getInfoCardPosition(event),
+
   }
 }
 
 function openInfoCardForResource(pathOrToken: string, event: MouseEvent | KeyboardEvent) {
+  setInfoCardAnchor(event)
   const path = normalizeResourcePathForMeta(pathOrToken)
   const meta = getResourceMeta(path) || createFallbackResourceMeta(path)
   activeInfoCard.value = {
     kind: 'resource',
     title: meta.label,
-    subtitle: meta.metaItems[0] || meta.typeLabel,
-    description: meta.description || '',
+    subtitle: meta.typeLabel,
+    description: meta.description || '正在加载用途说明…',
     raw: wrapWorkspaceResourcePath(path),
     iconSrc: meta.iconSrc,
     iconComponent: meta.iconComponent,
     iconClass: meta.iconClass,
-    ...getInfoCardPosition(event),
+
   }
-  if (!resourceMetaByPath.value[path]) {
-    resourceMetaByPath.value = {
-      ...resourceMetaByPath.value,
-      [path]: meta,
+  const card = activeInfoCard.value
+  void getServiceTreeDetail(path).then(detail => {
+    const loaded = mapResourceDetailToMeta(detail)
+    resourceMetaByPath.value = { ...resourceMetaByPath.value, [path]: loaded }
+    if (activeInfoCard.value !== card) return
+    Object.assign(card, {
+      title: loaded.label, subtitle: loaded.typeLabel,
+      description: loaded.description || '这个资源尚未填写用途说明。',
+      iconSrc: loaded.iconSrc, iconComponent: loaded.iconComponent, iconClass: loaded.iconClass,
+    })
+  }).catch(() => {
+    if (activeInfoCard.value === card && card && !meta.description) {
+      card.description = '暂时无法加载用途说明，请稍后重新点击查看。'
     }
-  }
+  })
 }
 
-function getInfoCardPosition(event: MouseEvent | KeyboardEvent) {
-  const root = rootRef.value
-  if (!root) {
-    return { left: 0, top: 0 }
-  }
-  const rootRect = root.getBoundingClientRect()
-  const target = event.currentTarget instanceof HTMLElement ? event.currentTarget : null
-  const targetRect = target?.getBoundingClientRect()
-  const rawLeft = targetRect ? targetRect.left - rootRect.left : 12
-  const rawTop = targetRect ? targetRect.bottom - rootRect.top + 8 : 12
-  return {
-    left: Math.max(8, Math.min(rawLeft, Math.max(8, rootRect.width - 328))),
-    top: Math.max(8, rawTop),
-  }
+function setInfoCardAnchor(event: MouseEvent | KeyboardEvent) {
+  const target = event.target instanceof Element ? event.target : null
+  infoCardAnchor.value = target?.closest<HTMLElement>('.spc-editor-token, .spc-user-chip, .spc-resource-chip')
+    || (event.currentTarget instanceof HTMLElement ? event.currentTarget : rootRef.value)
+  closeMentionPanel()
 }
 
 function closeInfoCard() {
@@ -1538,7 +1726,7 @@ function closeInfoCard() {
 
 function handleDocumentMouseDown(event: MouseEvent) {
   const root = rootRef.value
-  if (!root || !(event.target instanceof Node) || root.contains(event.target)) {
+  if (!root || !(event.target instanceof Node) || root.contains(event.target) || infoCardRef.value?.contains(event.target)) {
     return
   }
   closeInfoCard()
@@ -1696,9 +1884,9 @@ function getResourceTypeLabel(resource: ResourceSearchResult) {
   if (isWorkspaceToolResourcePath(resource.full_code_path || '')) return '内置工具'
   if (resource.type === 'package') return '服务目录'
   if (resource.type === 'docs') return '文档'
-  if (resource.template_type === 'table') return '表格工具'
-  if (resource.template_type === 'form') return '表单工具'
-  if (resource.template_type === 'chart') return '图表工具'
+  if (resource.template_type === 'table') return '数据表'
+  if (resource.template_type === 'form') return '表单'
+  if (resource.template_type === 'chart') return '图表'
   return '工具'
 }
 
@@ -1774,7 +1962,7 @@ function focus() {
     const selection = window.getSelection()
     const range = selection?.rangeCount ? selection.getRangeAt(0) : null
     if (document.activeElement === editor && (!range || !isRangeInside(editor, range))) {
-      restoreCaretTextOffset(editor, currentText.value.length)
+      restoreCaretTextOffset(editor, Math.min(lastCaretOffset, currentText.value.length))
     }
   })
 }
@@ -1789,6 +1977,7 @@ function focusAtEnd() {
     if (!editor) return
     editor.focus()
     restoreCaretTextOffset(editor, currentText.value.length)
+    lastCaretOffset = currentText.value.length
   })
 }
 
@@ -1801,6 +1990,7 @@ defineExpose({
   focusAtEnd,
   blur,
   insertTextAtCaret,
+  insertWorkspaceResources,
   getElement: () => editorRef.value,
 })
 </script>
@@ -2099,10 +2289,19 @@ defineExpose({
   font-size: 11px;
 }
 
+:global(.spc-info-popover.el-popover.el-popper) {
+  z-index: var(--aos-z-global-overlay, 10040) !important;
+  max-width: calc(100vw - 24px);
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.spc-info-close { position: absolute; right: 8px; top: 6px; border: 0; background: transparent; color: inherit; cursor: pointer; font-size: 20px; }
 .spc-info-card {
-  position: absolute;
-  z-index: 32;
-  width: min(320px, calc(100% - 16px));
+  position: relative;
+  width: 100%;
+  max-height: min(300px, calc(100vh - 24px));
+  overflow-y: auto;
   box-sizing: border-box;
   border: 1px solid rgba(96, 231, 255, 0.22);
   border-radius: 10px;
@@ -2198,12 +2397,13 @@ defineExpose({
   font-size: 11px;
   line-height: 1.4;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .spc-mention-panel {
   width: 100%;
-  max-height: 338px;
+  max-height: min(520px, 65vh);
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -2219,11 +2419,37 @@ defineExpose({
   border-radius: 10px;
   background: transparent;
   box-shadow: none;
-  min-width: min(520px, calc(100vw - 24px));
+  min-width: min(300px, calc(100vw - 24px));
   max-width: calc(100vw - 24px);
 }
 
+.spc-resource-scopes, .spc-resource-tabs, .spc-mention-footer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  flex-shrink: 0;
+}
+.spc-resource-tabs { overflow-x: auto; border-bottom: 1px solid var(--el-border-color-lighter); }
+.spc-resource-scopes button, .spc-resource-tabs button, .spc-mention-footer button {
+  border: 0;
+  border-radius: 6px;
+  padding: 6px 10px;
+  background: transparent;
+  color: var(--el-text-color-secondary);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.spc-resource-scopes button[aria-pressed="true"], .spc-resource-tabs button[aria-selected="true"] {
+  color: var(--el-color-primary);
+  background: rgba(var(--color-primary-rgb), 0.14);
+  font-weight: 600;
+}
+.spc-resource-scopes button:disabled { opacity: .4; cursor: default; }
+.spc-resource-location { padding: 0 12px 6px; font-size: 11px; color: var(--el-text-color-secondary); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; flex-shrink: 0; }
+.spc-mention-footer { justify-content: space-between; border-top: 1px solid var(--el-border-color-lighter); font-size: 11px; color: var(--el-text-color-secondary); }
 .spc-mention-header {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -2258,6 +2484,8 @@ defineExpose({
 }
 
 .spc-mention-list {
+  min-height: 0;
+  overscroll-behavior: contain;
   overflow-y: auto;
   padding: 7px;
 }
@@ -2278,7 +2506,8 @@ defineExpose({
   grid-template-columns: 34px minmax(0, 1fr) auto;
   gap: 10px;
   align-items: center;
-  height: 62px;
+  min-height: 62px;
+  height: auto;
   border: 1px solid transparent;
   border-radius: 8px;
   background: transparent;

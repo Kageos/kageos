@@ -90,7 +90,7 @@ describe('useMiniWorkstationSessionView', () => {
     const { api, hasCurrentGeneratedArtifacts } = createHarness({ sessionId: 's-current' })
 
     expect(api.getSessionStatusKind(createSession({ status: 'generating' }))).toBe('running')
-    expect(api.getSessionStatusKind(createSession({ status: 'pending_confirmation' }))).toBe('waiting')
+    expect(api.getSessionStatusKind(createSession({ status: 'pending_confirmation' }))).toBe('output')
     expect(api.getSessionStatusKind(createSession({ status: 'pending_test' }))).toBe('output')
     expect(api.getSessionStatusLabel(createSession({ status: 'pending_test' }))).toBe('待自动测试')
     expect(api.getSessionStatusKind(createSession({ status: 'pending_build_repair' }))).toBe('output')

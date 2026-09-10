@@ -23,7 +23,11 @@ interface WorkspaceNodeDropPayload {
 export interface UseMiniWorkstationUploadsOptions {
   fullCodePath: Ref<string>
   inputText: Ref<string>
-  inputRef: Ref<{ focus: () => void; focusAtEnd?: () => void } | undefined>
+  inputRef: Ref<{
+    focus: () => void
+    focusAtEnd?: () => void
+    insertWorkspaceResources?: (paths: string[]) => void
+  } | undefined>
 }
 
 export function extractClipboardFiles(dataTransfer: ClipboardFileTransfer | null | undefined): File[] {
@@ -201,6 +205,10 @@ export function useMiniWorkstationUploads(options: UseMiniWorkstationUploadsOpti
           .map(payload => payload.full_code_path || '')
           .filter(Boolean)
         if (paths.length > 0) {
+          if (inputRef.value?.insertWorkspaceResources) {
+            inputRef.value.insertWorkspaceResources(paths)
+            return
+          }
           inputText.value = appendWorkspaceResourceTokens(inputText.value, paths, fullCodePath.value)
           await nextTick()
           if (inputRef.value?.focusAtEnd) {

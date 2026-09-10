@@ -260,3 +260,21 @@ func truncate(value string, max int) string {
 	}
 	return value[:max]
 }
+
+// CreateGuarded allows the owning service to lock/check its account in the same
+// transaction as token issuance, without coupling this package to a user model.
+func (s *Store) CreateGuarded(input CreateInput, guard func(*gorm.DB) error) (*CreateResult, error) {
+	if s.database() == nil {
+		return nil, errors.New("openapi token db is not configured")
+	}
+	var result *CreateResult
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := guard(tx); err != nil {
+			return err
+		}
+		var err error
+		result, err = (&Store{db: tx}).Create(input)
+		return err
+	})
+	return result, err
+}

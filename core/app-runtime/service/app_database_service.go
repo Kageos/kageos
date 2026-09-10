@@ -23,6 +23,7 @@ import (
 	"github.com/kageos/kageos/dto"
 	appconfig "github.com/kageos/kageos/pkg/config"
 	"github.com/kageos/kageos/pkg/logger"
+	"github.com/kageos/kageos/pkg/mysqlstats"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
@@ -99,23 +100,40 @@ func (s *AppDatabaseService) CapacityStats(ctx context.Context) dto.SystemDataba
 	}
 	var records []model.AppDatabase
 	if err := s.db.WithContext(ctx).Order("database_name ASC").Find(&records).Error; err != nil {
+		stats.Error = "workspace database registry unavailable"
 		return stats
 	}
 	adminDB, err := s.openAdminDB()
 	if err != nil {
+		stats.Error = "workspace database connection unavailable"
 		return stats
 	}
 	defer closeGORM(adminDB)
 	var physical []databaseCapacityUsage
+	sourceID := ""
 	query := `SELECT s.schema_name AS name, COALESCE(SUM(t.data_length + t.index_length), 0) AS used_bytes
 		FROM information_schema.schemata s
 		LEFT JOIN information_schema.tables t ON t.table_schema = s.schema_name
 		WHERE LEFT(s.schema_name, CHAR_LENGTH(?)) = ?
 		GROUP BY s.schema_name`
-	if err := adminDB.WithContext(ctx).Raw(query, s.cfg.DatabasePrefix, s.cfg.DatabasePrefix).Scan(&physical).Error; err != nil {
+	if err := mysqlstats.Fresh(ctx, adminDB, func(db *gorm.DB) error {
+		if db.Dialector.Name() == "mysql" {
+			if err := db.Raw("SELECT @@server_uuid").Scan(&sourceID).Error; err != nil {
+				return err
+			}
+			if sourceID == "" {
+				return fmt.Errorf("database identity unavailable")
+			}
+		}
+		return db.Raw(query, s.cfg.DatabasePrefix, s.cfg.DatabasePrefix).Scan(&physical).Error
+	}); err != nil {
+		stats.Error = "workspace database capacity query failed"
 		return stats
 	}
 	stats.Databases = buildWorkspaceDatabaseInventory(records, physical, s.cfg.DatabasePrefix)
+	for index := range stats.Databases {
+		stats.Databases[index].SourceID = sourceID
+	}
 	stats.Available = true
 	for _, database := range stats.Databases {
 		stats.TotalBytes += database.UsedBytes

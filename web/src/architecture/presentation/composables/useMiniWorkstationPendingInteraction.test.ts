@@ -104,7 +104,7 @@ describe('useMiniWorkstationPendingInteraction', () => {
     })
   })
 
-  it('blocks normal sending when a PRD confirmation is pending', async () => {
+  it('does not restore a composer gate from historical PRD artifacts', async () => {
     const { api } = createHarness([
       assistantWithArtifact({
         kind: 'agent_app_prd',
@@ -117,13 +117,10 @@ describe('useMiniWorkstationPendingInteraction', () => {
       })
     ])
 
-    expect(api.pendingInteraction.value?.id).toBe('prd-1')
-    expect(api.composerBlocked.value).toBe(true)
+    expect(api.pendingInteraction.value).toBeNull()
+    expect(api.composerBlocked.value).toBe(false)
 
-    await expect(api.handleBeforeSend({ text: '继续实现', files: null })).resolves.toMatchObject({
-      cancel: true,
-      preserveDraft: true
-    })
+    await expect(api.handleBeforeSend({ text: '继续实现', files: null })).resolves.toBe(false)
     expect(recordWorkspaceInteractionEventMock).not.toHaveBeenCalled()
   })
 
@@ -163,8 +160,8 @@ describe('useMiniWorkstationPendingInteraction', () => {
       assistantWithArtifact(prdArtifact)
     ])
 
-    expect(api.pendingInteraction.value?.id).toBe('prd-1')
-    expect(api.composerBlocked.value).toBe(true)
+    expect(api.pendingInteraction.value).toBeNull()
+    expect(api.composerBlocked.value).toBe(false)
 
     await api.handleConfirmPrd({ remark: '', prd: prdArtifact })
 

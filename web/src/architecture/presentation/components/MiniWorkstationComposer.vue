@@ -70,7 +70,7 @@
         :submit-on-enter="composerSubmitOnEnter"
         :show-toolbar="variant === 'schedule'"
         :compact="variant !== 'schedule'"
-        :min-rows="variant === 'schedule' ? 6 : 1"
+        :min-rows="variant === 'schedule' ? 6 : 4"
         :max-rows="variant === 'schedule' ? 14 : 4"
         :full-code-path="fullCodePath"
         :mention-panel-placement="mentionPanelPlacement"
@@ -162,6 +162,7 @@ import MiniWorkstationResourceIdentity from './MiniWorkstationResourceIdentity.v
 interface FocusableInput {
   focus: () => void
   focusAtEnd?: () => void
+  insertWorkspaceResources?: (paths: string[]) => void
 }
 
 const props = withDefaults(defineProps<{

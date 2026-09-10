@@ -260,6 +260,9 @@ func TestBuildCapacityDailyHistoryCalculatesDatabaseDeltas(t *testing.T) {
 		!history[1].DatabaseLogicalDeltaAvailable || !history[1].DatabaseCountDeltaAvailable {
 		t.Fatalf("daily capacity history = %#v", history)
 	}
+	if history[1].PreviousCollectedAt == nil || !history[1].PreviousCollectedAt.Equal(start) {
+		t.Fatal("comparison timestamp missing")
+	}
 	if history[1].PlatformDatabaseCount != 1 || history[1].WorkspaceDatabaseCount != 2 {
 		t.Fatalf("daily database breakdown = %#v", history[1])
 	}
@@ -445,5 +448,49 @@ func writeSizedFile(t *testing.T, path string, size int) {
 	}
 	if err := os.WriteFile(path, make([]byte, size), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestScopedCapacityHistoryKeepsGapsAndSingleDatabase(t *testing.T) {
+	now := time.Date(2026, 9, 7, 3, 0, 0, 0, time.Local)
+	snapshots := []dto.SystemResourceSnapshot{}
+	for _, offset := range []int{-3, -1, 0} {
+		snapshots = append(snapshots, dto.SystemResourceSnapshot{CollectedAt: now.AddDate(0, 0, offset), DatabaseInventoryComplete: true, DatabaseSizeAvailable: true, Databases: []dto.SystemDatabaseSize{{Name: "a", Kind: "workspace", Status: "active", UsedBytes: uint64(100 + offset)}, {Name: "b", Kind: "platform", Status: "active", UsedBytes: 999}}})
+	}
+	points := scopedCapacityHistory(snapshots, "workspace", DatabaseHistoryOptions{Days: 7, Name: "a"}, now)
+	if len(points) != 7 || points[4].DatabaseSizeAvailable || points[5].DatabaseLogicalDeltaAvailable {
+		t.Fatalf("gap was fabricated: %+v", points)
+	}
+	if points[6].DatabaseLogicalBytes != 100 || points[6].DatabaseCount != 1 || points[6].DatabaseLogicalDelta != 1 || !points[6].DatabaseLogicalDeltaAvailable {
+		t.Fatalf("wrong scoped values: %+v", points[6])
+	}
+	points = scopedCapacityHistory(snapshots, "all", DatabaseHistoryOptions{Days: 30, Name: "unknown"}, now)
+	if len(points) != 30 || points[29].DatabaseSizeAvailable {
+		t.Fatal("missing database must not have a zero-value sample")
+	}
+}
+
+func TestCapacityScopeVersionChangeDoesNotReportDailyGrowth(t *testing.T) {
+	now := time.Now()
+	points := buildCapacityDailyHistory([]dto.SystemResourceSnapshot{
+		{CollectedAt: now.AddDate(0, 0, -1), CapacitySchemaVersion: 2, DatabaseInventoryComplete: true, DatabaseSizeAvailable: true, DatabaseLogicalBytes: 100},
+		{CollectedAt: now, CapacitySchemaVersion: 3, DatabaseInventoryComplete: true, DatabaseSizeAvailable: true, DatabaseLogicalBytes: 500},
+	})
+	if len(points) != 2 || points[1].DatabaseLogicalDeltaAvailable || points[1].DatabaseCountDeltaAvailable {
+		t.Fatal("discovery scope change must not be reported as daily growth")
+	}
+}
+
+func TestDatabaseInventoryDoesNotMergeSameNamesOnDifferentInstances(t *testing.T) {
+	local := []dto.SystemDatabaseSize{{SourceID: "one", Name: "orders", Kind: "unmanaged", UsedBytes: 100}, {SourceID: "two", Name: "orders", Kind: "unmanaged", UsedBytes: 200}}
+	remote := []dto.SystemDatabaseSize{{SourceID: "two", Name: "orders", Kind: "workspace", UsedBytes: 200}}
+	merged := mergeDatabaseInventory(local, remote)
+	if len(merged) != 2 || merged[0].SourceID != "one" || merged[1].Kind != "workspace" {
+		t.Fatalf("distinct instances lost: %+v", merged)
+	}
+	now := time.Now()
+	points := scopedCapacityHistory([]dto.SystemResourceSnapshot{{CollectedAt: now, DatabaseInventoryComplete: true, DatabaseSizeAvailable: true, Databases: merged}}, "all", DatabaseHistoryOptions{Days: 7, Name: "one/orders"}, now)
+	if points[6].DatabaseLogicalBytes != 100 || points[6].DatabaseCount != 1 {
+		t.Fatalf("single database identity ignored: %+v", points[6])
 	}
 }

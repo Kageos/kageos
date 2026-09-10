@@ -37,14 +37,20 @@
           <el-option :label="t('publicSharePanel.statusEnabled')" value="enabled" />
           <el-option :label="t('publicSharePanel.statusDisabled')" value="disabled" />
           <el-option :label="t('publicSharePanel.statusExpired')" value="expired" />
+          <el-option :label="t('shareGovernance.exhausted')" value="exhausted" />
         </el-select>
         <el-button type="primary" plain :icon="Search" @click="load">{{ t('publicSharePanel.filter') }}</el-button>
         <el-button plain :icon="Refresh" :loading="loading" @click="resetFilters">{{ t('common.reset') }}</el-button>
       </div>
 
+      <div class="share-bulk-toolbar">
+        <el-button type="danger" plain :loading="bulkClosing" :disabled="!selectedShares.length" @click="closeSelected">{{ t('shareGovernance.closeSelected', { count: selectedShares.length }) }}</el-button>
+        <span>{{ t('shareGovernance.scope') }}</span>
+      </div>
       <div v-loading="loading" class="mobile-share-list">
         <el-empty v-if="shares.length === 0" :description="t('publicSharePanel.empty')" :image-size="80" />
         <article v-for="row in shares" :key="row.share_id" class="mobile-share-card">
+          <el-checkbox :model-value="selectedShares.some(item => item.share_id === row.share_id)" :disabled="!row.enabled || bulkClosing" @change="toggleSelected(row)">{{ t('shareGovernance.select') }}</el-checkbox>
           <div class="mobile-share-head">
             <div class="mobile-share-title">
               <div class="title-name">{{ shareDisplayTitle(row) }}</div>
@@ -97,8 +103,10 @@
         :data="shares"
         stripe
         class="history-table"
+        @selection-change="selectedShares = $event"
         :empty-text="t('publicSharePanel.empty')"
       >
+        <el-table-column type="selection" width="48" :selectable="(row: PublicShareItem) => row.enabled && !bulkClosing" />
         <el-table-column :label="t('publicSharePanel.shareTitle')" min-width="220">
           <template #default="{ row }">
             <div class="title-cell">
@@ -222,7 +230,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import QRCode from 'qrcode'
 import { Refresh, Search } from '@element-plus/icons-vue'
 import PublicShareCreateDialog from '@/architecture/presentation/components/PublicShareCreateDialog.vue'
@@ -242,6 +250,8 @@ const { t } = useI18n()
 
 const loading = ref(false)
 const disablingId = ref('')
+const selectedShares = ref<PublicShareItem[]>([])
+const bulkClosing = ref(false)
 const shares = ref<PublicShareItem[]>([])
 const dialogVisible = ref(false)
 const qrDialogVisible = ref(false)
@@ -287,6 +297,7 @@ async function load() {
       status: filters.status,
     })
     shares.value = resp.items || []
+    selectedShares.value = []
   } finally {
     loading.value = false
   }
@@ -316,6 +327,29 @@ async function disableShare(shareId: string) {
   } finally {
     disablingId.value = ''
   }
+}
+
+function toggleSelected(row: PublicShareItem) {
+  selectedShares.value = selectedShares.value.some(item => item.share_id === row.share_id)
+    ? selectedShares.value.filter(item => item.share_id !== row.share_id)
+    : [...selectedShares.value, row]
+}
+async function closeSelected() {
+  const selected = [...selectedShares.value]
+  if (!selected.length || bulkClosing.value) return
+  try { await ElMessageBox.confirm(t('shareGovernance.confirm', { count: selected.length }), t('publicSharePanel.close'), { type: 'warning' }) }
+  catch { return }
+  bulkClosing.value = true
+  let failed = 0
+  try {
+    for (const row of selected) {
+      try { await disablePublicShare(row.share_id) } catch { failed++ }
+    }
+    await load()
+    if (failed) ElMessage.warning(t('shareGovernance.partial', { count: failed }))
+    else ElMessage.success(t('publicSharePanel.closeSuccess'))
+  } catch { ElMessage.error(t('shareGovernance.refreshFailed')) }
+  finally { bulkClosing.value = false }
 }
 
 async function copyLink(link: string) {
@@ -380,12 +414,13 @@ function isExpired(value?: string) {
 function statusLabel(row: PublicShareItem) {
   if (!row.enabled) return t('publicSharePanel.statusDisabled')
   if (isExpired(row.expires_at)) return t('publicSharePanel.statusExpired')
+  if (row.max_uses > 0 && row.use_count >= row.max_uses) return t('shareGovernance.exhausted')
   return t('publicSharePanel.statusEnabled')
 }
 
 function statusTagType(row: PublicShareItem) {
   if (!row.enabled) return 'info'
-  if (isExpired(row.expires_at)) return 'warning'
+  if (isExpired(row.expires_at) || (row.max_uses > 0 && row.use_count >= row.max_uses)) return 'warning'
   return 'success'
 }
 

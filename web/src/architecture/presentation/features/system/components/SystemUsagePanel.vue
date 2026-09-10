@@ -2,7 +2,7 @@
   <div v-loading="loading" class="usage-panel">
     <header class="usage-toolbar">
       <div><h4>{{ t('systemSettings.resources.usage.title') }}</h4><p>{{ t('systemSettings.resources.usage.description') }}</p></div>
-      <el-radio-group v-model="periodDays" size="small" @change="load">
+      <el-radio-group v-model="periodDays" size="small" @change="handlePeriodChange">
         <el-radio-button :value="7">{{ t('systemSettings.resources.usage.days7') }}</el-radio-button>
         <el-radio-button :value="30">{{ t('systemSettings.resources.usage.days30') }}</el-radio-button>
       </el-radio-group>
@@ -21,12 +21,13 @@
       <section class="usage-card trend-card">
         <div class="section-heading">
           <div><h5>{{ t('systemSettings.resources.usage.trendTitle') }}</h5><p>{{ t('systemSettings.resources.usage.trendDesc') }}</p></div>
-          <span>{{ collectedLabel }}</span>
+          <el-radio-group v-model="chartView" size="small"><el-radio-button value="line">{{ t('systemSettings.resources.dashboard.line') }}</el-radio-button><el-radio-button value="bar">{{ t('systemSettings.resources.dashboard.bar') }}</el-radio-button></el-radio-group>
         </div>
         <VChart v-if="overview.daily_history.length" class="usage-echart" :option="chartOption" autoresize :aria-label="t('systemSettings.resources.usage.trendTitle')" />
         <el-empty v-else :description="t('systemSettings.resources.usage.noHistory')" :image-size="72" />
       </section>
 
+      <p class="usage-collected">{{ collectedLabel }}</p>
       <section class="usage-card ranking-card">
         <div class="section-heading ranking-heading">
           <div>
@@ -87,6 +88,8 @@ use([CanvasRenderer, BarChart, LineChart, GridComponent, LegendComponent, Toolti
 const { t } = useI18n()
 const loading = ref(false)
 const periodDays = ref(7)
+const chartView = ref('line')
+let requestSequence = 0
 const rankingMode = ref<'directories' | 'functions'>('directories')
 const rankingPage = ref(1)
 const rankingPageSize = 10
@@ -116,16 +119,30 @@ const chartOption = computed(() => {
         return `<div style="min-width:150px"><strong>${formatDate(row.date)}</strong><div style="display:flex;justify-content:space-between;gap:24px;margin-top:8px"><span>${t('systemSettings.resources.usage.operations')}</span><b>${formatCount(row.operations)}</b></div><div style="display:flex;justify-content:space-between;gap:24px;margin-top:5px"><span>${t('systemSettings.resources.usage.failed')}</span><b>${formatCount(row.failed)}</b></div></div>`
       },
     },
-    xAxis: { type: 'category', boundaryGap: true, data: rows.map(item => shortDate(item.date)), axisLine: { lineStyle: { color: 'rgba(148, 163, 184, .24)' } }, axisTick: { show: false }, axisLabel: { color: '#8d93a6', fontSize: 11, interval: rows.length > 14 ? 4 : rows.length > 7 ? 1 : 0 } },
+    xAxis: { type: 'category', boundaryGap: chartView.value === 'bar', data: rows.map(item => shortDate(item.date)), axisLine: { lineStyle: { color: 'rgba(148, 163, 184, .24)' } }, axisTick: { show: false }, axisLabel: { color: '#8d93a6', fontSize: 11, interval: rows.length > 14 ? 4 : rows.length > 7 ? 1 : 0 } },
     yAxis: { type: 'value', min: 0, minInterval: 1, name: t('systemSettings.resources.usage.axisUnit'), nameTextStyle: { color: '#8d93a6', fontSize: 11, padding: [0, 0, 8, -34] }, axisLabel: { color: '#8d93a6', fontSize: 11, formatter: (value: number) => compactCount(value) }, splitLine: { lineStyle: { color: 'rgba(148, 163, 184, .13)', type: 'dashed' } } },
     series: [
-      { name: t('systemSettings.resources.usage.operations'), type: 'line', smooth: 0.28, symbol: 'circle', symbolSize: 7, showSymbol: rows.length <= 14, lineStyle: { width: 2.5, color: '#818cf8' }, itemStyle: { color: '#818cf8', borderColor: '#171a29', borderWidth: 2 }, areaStyle: { color: 'rgba(129, 140, 248, .16)' }, emphasis: { focus: 'series' }, data: rows.map(item => item.operations) },
+      { name: t('systemSettings.resources.usage.operations'), type: chartView.value, smooth: false, symbol: 'circle', symbolSize: 7, showSymbol: rows.length <= 14, lineStyle: { width: 2.5, color: '#818cf8' }, itemStyle: { color: '#818cf8', borderColor: '#171a29', borderWidth: 2 }, areaStyle: { color: 'rgba(129, 140, 248, .16)' }, emphasis: { focus: 'series' }, data: rows.map(item => item.operations) },
       { name: t('systemSettings.resources.usage.failed'), type: 'bar', barMaxWidth: 16, itemStyle: { color: '#fb7185', borderRadius: [3, 3, 0, 0] }, emphasis: { focus: 'series' }, data: rows.map(item => item.failed) },
     ],
   }
 })
 
-async function load() { loading.value = true; try { overview.value = await getSystemResourceUsage(periodDays.value, rankingPage.value, rankingPageSize) } catch (error: any) { ElMessage.error(error?.response?.data?.msg || error?.message || t('systemSettings.resources.usage.loadFailed')) } finally { loading.value = false } }
+async function load() {
+ const sequence = ++requestSequence
+ loading.value = true
+ try {
+  const result = await getSystemResourceUsage(periodDays.value, rankingPage.value, rankingPageSize)
+  if (sequence === requestSequence) overview.value = result
+ } catch (error: any) {
+  if (sequence === requestSequence) {
+   overview.value = null
+   ElMessage.error(error?.response?.data?.msg || error?.message || t('systemSettings.resources.usage.loadFailed'))
+  }
+ } finally { if (sequence === requestSequence) loading.value = false }
+}
+function handlePeriodChange() { rankingPage.value = 1; overview.value = null; void load() }
+
 function handleRankingModeChange() { rankingPage.value = 1; void load() }
 function formatCount(value: number | string) { return Number(value || 0).toLocaleString() }
 function compactCount(value: number) { return Intl.NumberFormat(undefined, { notation: value >= 1000 ? 'compact' : 'standard', maximumFractionDigits: 1 }).format(value) }
@@ -173,4 +190,26 @@ onMounted(load)
 .ranking-footer { display: flex; align-items: center; justify-content: space-between; min-height: 48px; margin-top: 8px; padding-top: 10px; border-top: 1px solid var(--border-light); color: var(--text-secondary); font-size: 12px; }
 @media (max-width: 1050px) { .usage-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .ranking-table-head, .ranking-table article { grid-template-columns: 40px minmax(220px, 1fr) 110px 100px; } }
 @media (max-width: 720px) { .usage-toolbar, .section-heading { flex-direction: column; } .usage-summary-grid { grid-template-columns: 1fr; } .ranking-table { overflow-x: auto; } .ranking-table-head, .ranking-table article { min-width: 650px; } }
+
+.usage-panel { gap:22px; }
+.usage-toolbar { padding:4px 0 2px; }
+.usage-toolbar h4 { font-size:22px; letter-spacing:-.5px; }
+.usage-summary-grid { gap:16px; }
+.usage-summary-grid article { position:relative; padding:24px; gap:12px; border-radius:14px; background:var(--bg-primary); overflow:hidden; }
+.usage-summary-grid article::before { content:''; position:absolute; inset:0 auto 0 0; width:3px; background:#5985ed; }
+.usage-summary-grid article:nth-child(2)::before { background:#38aa99; }
+.usage-summary-grid article:nth-child(3)::before { background:#9780d5; }
+.usage-summary-grid article:nth-child(4)::before { background:#dd9670; }
+.usage-summary-grid strong { font-size:34px; letter-spacing:-1px; font-variant-numeric:tabular-nums; font-weight:650; }
+.usage-summary-grid small { font-size:11px; }
+.usage-card { padding:24px; border-radius:16px; background:var(--bg-primary); }
+.section-heading h5 { font-size:17px; letter-spacing:-.25px; }
+.usage-echart { height:330px; margin-top:20px; }
+.usage-collected { margin:-12px 0 0; color:var(--text-secondary); font-size:11px; text-align:right; }
+.ranking-table article { min-height:76px; }
+.rank-track { height:5px; max-width:320px; margin-top:8px; }
+.rank-number { width:30px; height:30px; border-radius:50%; }
+.rank-name strong { font-size:14px; }
+.rank-resource-icon { width:30px; height:30px; flex-basis:30px; }
+@media (max-width:720px) { .usage-summary-grid { grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; } .usage-summary-grid article { padding:16px; } .usage-summary-grid strong { font-size:26px; } .usage-card { padding:16px; } }
 </style>

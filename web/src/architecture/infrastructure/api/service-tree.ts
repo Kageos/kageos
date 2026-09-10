@@ -260,6 +260,7 @@ export function installCapabilityBundleFromURL(data: {
 
 // 搜索函数
 export interface SearchFunctionsReq {
+  full_code_path?: string
   user: string
   app: string
   keyword?: string
@@ -297,6 +298,7 @@ export interface SearchFunctionsResp {
 
 export function searchFunctions(req: SearchFunctionsReq) {
   return get<SearchFunctionsResp>('/workspace/api/v1/service_tree/search_functions', {
+    full_code_path: req.full_code_path || '',
     user: req.user,
     app: req.app,
     keyword: req.keyword || '',
@@ -310,6 +312,7 @@ export function searchFunctions(req: SearchFunctionsReq) {
 export type SearchResourceType = 'all' | 'package' | 'function' | 'docs'
 
 export interface SearchResourcesReq {
+  full_code_path?: string
   user?: string
   app?: string
   keyword: string
@@ -344,6 +347,7 @@ export interface SearchResourcesResp {
 
 export function searchResources(req: SearchResourcesReq) {
   return get<SearchResourcesResp>('/workspace/api/v1/service_tree/search_resources', {
+    full_code_path: req.full_code_path || '',
     user: req.user || '',
     app: req.app || '',
     keyword: req.keyword || '',

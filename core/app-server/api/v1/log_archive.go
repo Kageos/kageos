@@ -30,3 +30,20 @@ func (h *LogArchive) List(c *gin.Context) {
 	cfg := h.service.Config()
 	response.OkWithData(c, gin.H{"list": rows, "total": total, "retention_days": cfg.RetentionDays, "cron_expr": cfg.CronExpr, "timezone": cfg.Timezone})
 }
+
+func (h *LogArchive) Retry(c *gin.Context) {
+	if contextx.GetRequestUser(c) != service.SystemUsername {
+		response.FailWithMessage(c, "仅 system 超管可重试日志归档")
+		return
+	}
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		response.FailWithMessage(c, "无效的归档批次")
+		return
+	}
+	if err := h.service.Retry(contextx.ToContext(c), id); err != nil {
+		response.FailWithMessage(c, "重试归档未完成，可从已保存的阶段继续: "+err.Error())
+		return
+	}
+	response.OkWithData(c, gin.H{"id": id})
+}

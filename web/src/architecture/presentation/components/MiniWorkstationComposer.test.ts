@@ -48,18 +48,18 @@ function mountComposer(props: Record<string, unknown> = {}) {
 }
 
 describe('MiniWorkstationComposer', () => {
-  it('keeps the input visible but blocked during pending interactions', async () => {
+  it('keeps the input visible but blocked for an explicit generic interaction', async () => {
     const wrapper = mountComposer({
       blocked: true,
-      blockedLabel: 'PRD 待确认',
-      blockedPlaceholder: '请先确认 PRD',
+      blockedLabel: '等待处理',
+      blockedPlaceholder: '请先处理当前操作',
     })
 
     const editor = wrapper.find('[data-testid="mini-workstation-input"]')
     expect(editor.exists()).toBe(true)
     expect(editor.attributes('contenteditable')).toBe('false')
-    expect(editor.attributes('data-placeholder')).toBe('请先确认 PRD')
-    expect(wrapper.text()).toContain('PRD 待确认')
+    expect(editor.attributes('data-placeholder')).toBe('请先处理当前操作')
+    expect(wrapper.text()).toContain('等待处理')
 
     editor.element.textContent = '继续生成'
     await editor.trigger('input')

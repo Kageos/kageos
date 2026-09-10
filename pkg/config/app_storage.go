@@ -109,8 +109,8 @@ func (c *AppStorageConfig) GetStorageType() string {
 	return "minio"
 }
 
-// GetMinIOConsoleURL 返回显式配置的控制台地址。开发环境的本机 9000 端点会安全推导为 9001；
-// 生产环境不猜测或暴露控制台地址。
+// GetMinIOConsoleURL returns only an explicitly configured operations URL.
+// Asset APIs do not expose this address; loopback endpoints never infer a console.
 func (c *AppStorageConfig) GetMinIOConsoleURL() string {
 	if c == nil || c.GetStorageType() != "minio" {
 		return ""
@@ -118,18 +118,7 @@ func (c *AppStorageConfig) GetMinIOConsoleURL() string {
 	if value := strings.TrimSpace(c.Storage.MinIO.ConsoleURL); value != "" {
 		return value
 	}
-	if value := strings.TrimSpace(os.Getenv("MINIO_CONSOLE_URL")); value != "" {
-		return value
-	}
-	endpoint := strings.TrimSpace(c.Storage.MinIO.Endpoint)
-	if endpoint == "127.0.0.1:9000" || endpoint == "localhost:9000" {
-		scheme := "http"
-		if c.Storage.MinIO.UseSSL {
-			scheme = "https"
-		}
-		return scheme + "://" + strings.TrimSuffix(endpoint, ":9000") + ":9001"
-	}
-	return ""
+	return strings.TrimSpace(os.Getenv("MINIO_CONSOLE_URL"))
 }
 
 // GetPort 获取端口

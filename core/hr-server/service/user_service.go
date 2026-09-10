@@ -10,6 +10,7 @@ import (
 	"github.com/kageos/kageos/core/hr-server/repository"
 	"github.com/kageos/kageos/dto"
 	"github.com/kageos/kageos/pkg/logger"
+	"github.com/kageos/kageos/pkg/openapitoken"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
@@ -267,7 +268,7 @@ func (s *UserService) ChangeOwnPassword(ctx context.Context, username, currentPa
 	return nil
 }
 
-func (s *UserService) UpdateUserStatusFromSystem(ctx context.Context, username, status string) (*model.User, error) {
+func (s *UserService) UpdateUserStatusFromSystem(ctx context.Context, username, status string, audit ...string) (*model.User, error) {
 	user, err := s.userRepo.GetUserByUsername(strings.ToLower(strings.TrimSpace(username)))
 	if err != nil {
 		return nil, fmt.Errorf("用户不存在: %w", err)
@@ -279,19 +280,32 @@ func (s *UserService) UpdateUserStatusFromSystem(ctx context.Context, username, 
 	if user.Username == SystemUsername && status != "active" {
 		return nil, fmt.Errorf("不能停用 system 用户")
 	}
-	if user.Status == status {
-		return user, nil
+	actor, reason := SystemUsername, "管理员调整账户状态"
+	if len(audit) > 0 {
+		actor = audit[0]
 	}
-	user.Status = status
-	if status == "active" {
-		user.EmailVerified = true
+	if len(audit) > 1 && strings.TrimSpace(audit[1]) != "" {
+		reason = strings.TrimSpace(audit[1])
 	}
-	if err := s.userRepo.UpdateUser(user); err != nil {
-		return nil, fmt.Errorf("更新用户状态失败: %w", err)
+	if len([]rune(reason)) > 500 {
+		return nil, fmt.Errorf("原因不能超过 500 字")
 	}
-	if status != "active" {
-		if err := s.invalidateUserTokens(ctx, user, "system_user_status_changed"); err != nil {
-			return nil, err
+	user, sessions, tokens, err := s.userRepo.ChangeUserStatus(ctx, user.Username, status, actor, reason)
+	if err != nil {
+		return nil, fmt.Errorf("更新账户及撤销凭证失败: %w", err)
+	}
+	if status != "active" && s.tokenPublisher != nil {
+		var notificationErrors []error
+		if err := s.tokenPublisher.InvalidateUserTokens(ctx, user.ID, user.Username, sessions, "system_user_status_changed"); err != nil {
+			notificationErrors = append(notificationErrors, err)
+		}
+		for _, token := range tokens {
+			if err := s.tokenPublisher.InvalidateOpenAPIToken(ctx, user.ID, user.Username, token.TokenHash, token.ExpiresAt); err != nil {
+				notificationErrors = append(notificationErrors, err)
+			}
+		}
+		if len(notificationErrors) > 0 {
+			return nil, fmt.Errorf("账户及凭证已停用，网关通知失败，请重试停用操作（缓存最多保留一分钟）: %w", errors.Join(notificationErrors...))
 		}
 	}
 	logger.Infof(ctx, "[UserService] system updated user status: %s status=%s", user.Username, status)
@@ -466,4 +480,8 @@ func firstNonEmptyString(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func (s *UserService) CreateActiveUserOpenAPIToken(ctx context.Context, store *openapitoken.Store, input openapitoken.CreateInput) (*openapitoken.CreateResult, error) {
+	return s.userRepo.CreateActiveUserOpenAPIToken(ctx, store, input)
 }

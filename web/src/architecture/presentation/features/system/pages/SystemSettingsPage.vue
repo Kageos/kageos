@@ -197,14 +197,14 @@
                       <p>{{ t('systemSettings.resources.databaseInventoryDesc', { time: formatResourceTime(resourceOverview.capacity_collected_at) }) }}</p>
                     </div>
                     <div class="database-counts">
-                      <el-tag effect="plain">{{ t('systemSettings.resources.databaseCountAll', { count: databaseTotal }) }}</el-tag>
-                      <el-tag type="info" effect="plain">{{ t('systemSettings.resources.databaseCountPlatform', { count: platformDatabaseCount }) }}</el-tag>
-                      <el-tag type="success" effect="plain">{{ t('systemSettings.resources.databaseCountWorkspace', { count: workspaceDatabaseCount }) }}</el-tag>
+                      <el-tag effect="plain">{{ t('systemSettings.resources.databaseCountAll', { count: databaseLoadError ? '—' : databaseTotal }) }}</el-tag>
+                      <el-tag type="info" effect="plain">{{ t('systemSettings.resources.databaseCountPlatform', { count: databaseLoadError ? '—' : platformDatabaseCount }) }}</el-tag>
+                      <el-tag type="success" effect="plain">{{ t('systemSettings.resources.databaseCountWorkspace', { count: databaseLoadError ? '—' : workspaceDatabaseCount }) }}</el-tag>
                     </div>
                   </div>
                   <el-alert
-                    v-if="!resourceOverview.current.database_inventory_complete"
-                    :title="t('systemSettings.resources.databaseInventoryPartial')"
+                    v-if="databaseLoadError || !resourceOverview.current.database_inventory_complete"
+                    :title="databaseLoadError || t('systemSettings.resources.databaseInventoryPartial')"
                     type="warning"
                     :closable="false"
                     show-icon
@@ -225,37 +225,35 @@
                       <small>{{ latestCapacityDaily.database_count_delta_available ? formatSignedCount(latestCapacityDaily.database_count_delta) : '-' }}</small>
                     </article>
                   </div>
-                  <div v-if="capacityDailyRows.length" class="database-daily-history">
-                    <h5>{{ t('systemSettings.resources.databaseDailyHistory') }}</h5>
-                    <el-table :data="capacityDailyRows" size="small">
-                      <el-table-column :label="t('systemSettings.resources.capacityDate')" min-width="150"><template #default="{ row }">{{ formatResourceDate(row.collected_at) }}</template></el-table-column>
-                      <el-table-column :label="t('systemSettings.resources.databaseDailySize')" min-width="130"><template #default="{ row }">{{ row.database_size_available ? formatBytes(row.database_logical_bytes) : '-' }}</template></el-table-column>
-                      <el-table-column :label="t('systemSettings.resources.dailyDelta')" min-width="130"><template #default="{ row }">{{ row.database_logical_delta_available ? formatSignedBytes(row.database_logical_delta) : '-' }}</template></el-table-column>
-                      <el-table-column :label="t('systemSettings.resources.databaseDailyCount')" min-width="110"><template #default="{ row }">{{ row.database_count_available ? row.database_count : '-' }}</template></el-table-column>
-                      <el-table-column :label="t('systemSettings.resources.countDelta')" min-width="110"><template #default="{ row }">{{ row.database_count_delta_available ? formatSignedCount(row.database_count_delta) : '-' }}</template></el-table-column>
-                    </el-table>
-                  </div>
+                  <SystemDatabaseHistory
+                    :history="resourceOverview.capacity_history || []"
+                    :databases="databaseHistoryOptions"
+                    :days="databaseHistoryDays"
+                    :database="databaseHistoryName"
+                    @change="changeDatabaseHistory"
+                  />
                   <div class="database-toolbar">
                     <el-input v-model="databaseSearch" clearable :placeholder="t('systemSettings.resources.databaseSearchPlaceholder')" />
                     <el-radio-group v-model="databaseScope" size="small">
                       <el-radio-button value="all">{{ t('systemSettings.resources.databaseScopeAll') }}</el-radio-button>
                       <el-radio-button value="platform">{{ t('systemSettings.resources.databaseScopePlatform') }}</el-radio-button>
                       <el-radio-button value="workspace">{{ t('systemSettings.resources.databaseScopeWorkspace') }}</el-radio-button>
+                      <el-radio-button value="unmanaged">{{ t('systemSettings.resources.dashboard.databaseScopeUnmanaged') }}</el-radio-button>
                     </el-radio-group>
                   </div>
-                  <el-table :data="databaseInventory" size="small" stripe class="database-size-table">
+                  <el-table :data="databaseLoadError ? [] : databaseInventory" size="small" stripe class="database-size-table">
                     <el-table-column :label="t('systemSettings.resources.databaseType')" width="110">
                       <template #default="{ row }"><el-tag :type="row.kind === 'platform' ? 'info' : 'success'" size="small" effect="plain">{{ databaseKindLabel(row.kind) }}</el-tag></template>
                     </el-table-column>
-                    <el-table-column prop="name" :label="t('systemSettings.resources.databaseName')" min-width="150" sortable><template #default="{ row }"><code class="database-code">{{ row.name }}</code></template></el-table-column>
+                    <el-table-column prop="name" :label="t('systemSettings.resources.databaseName')" min-width="150" sortable><template #default="{ row }"><code class="database-code">{{ row.name }}</code><small v-if="row.source_id" class="database-source">{{ row.source_id.slice(0, 8) }}</small></template></el-table-column>
                     <el-table-column prop="owner" :label="t('systemSettings.resources.databaseOwner')" min-width="180" />
                     <el-table-column prop="directory" :label="t('systemSettings.resources.databaseDirectory')" min-width="230"><template #default="{ row }"><code class="database-directory">{{ databaseDirectoryLabel(row.kind, row.directory) }}</code></template></el-table-column>
                     <el-table-column prop="purpose" :label="t('systemSettings.resources.databasePurpose')" min-width="260"><template #default="{ row }">{{ databasePurposeLabel(row.purpose) }}</template></el-table-column>
                     <el-table-column :label="t('systemSettings.resources.databaseStatus')" width="110"><template #default="{ row }"><el-tag :type="databaseStatusType(row.status)" size="small">{{ databaseStatusLabel(row.status) }}</el-tag></template></el-table-column>
-                    <el-table-column prop="used_bytes" :label="t('systemSettings.resources.logicalSize')" min-width="140" sortable><template #default="{ row }">{{ formatBytes(row.used_bytes) }}</template></el-table-column>
+                    <el-table-column prop="used_bytes" :label="t('systemSettings.resources.logicalSize')" min-width="140" sortable><template #default="{ row }">{{ row.status === 'missing' ? '—' : formatBytes(row.used_bytes) }}</template></el-table-column>
                   </el-table>
                   <el-pagination
-                    v-if="databaseTotal > databasePageSize"
+                    v-if="!databaseLoadError && databaseTotal > databasePageSize"
                     v-model:current-page="databasePage"
                     class="database-pagination"
                     background
@@ -266,7 +264,7 @@
                   />
               </div>
 
-              <div v-if="operationsTab === 'trends'" class="resource-panel">
+              <div v-if="operationsTab === 'trends' || operationsTab === 'overview'" class="resource-panel overview-trends">
                 <div class="resource-panel-heading">
                   <div>
                     <h4>{{ t('systemSettings.resources.historyTitle') }}</h4>
@@ -586,7 +584,7 @@
           </div>
 
           <div v-else-if="activeTab === 'dataBackup'" class="section-pane">
-            <SystemBackupPanel :key="backupPanelKey" />
+            <SystemBackupPanel ref="backupPanel" />
           </div>
 
           <div v-else-if="activeTab === 'backups'" v-loading="archivesLoading" class="section-pane backup-pane">
@@ -632,6 +630,15 @@
               </el-table-column>
               <el-table-column :label="t('systemSettings.archiveSummary')" min-width="260">
                 <template #default="{ row }"><span class="archive-resource-summary">{{ archiveResourceSummary(row) }}</span></template>
+              </el-table-column>
+              <el-table-column :label="t('systemSettings.archiveRetry')" min-width="190">
+                <template #default="{ row }">
+                  <div class="archive-primary-cell">
+                    <small>{{ t('systemSettings.archiveAttempts', { count: row.attempts || 0 }) }}</small>
+                    <small v-if="row.next_retry_at">{{ t('systemSettings.archiveNextRetry') }} {{ formatArchiveTime(row.next_retry_at) }}</small>
+                    <el-button v-if="row.status !== 'completed'" type="primary" plain size="small" :loading="retryingArchive === row.id" :disabled="retryingArchive !== null && retryingArchive !== row.id" @click="retryArchive(row)">{{ t('systemSettings.archiveRetry') }}</el-button>
+                  </div>
+                </template>
               </el-table-column>
               <el-table-column :label="t('systemSettings.archiveStatus')" width="110" align="right">
                 <template #default="{ row }"><el-tag :type="archiveStatusType(row.status)" size="small">{{ archiveStatusLabel(row.status) }}</el-tag></template>
@@ -738,6 +745,7 @@ import ConnectorProviderManagementPage from '@/architecture/presentation/feature
 import OpenAPITokenManagementPage from '@/architecture/presentation/features/agent/pages/OpenAPITokenManagementPage.vue'
 import SystemUserManagementPage from '@/architecture/presentation/features/system/pages/SystemUserManagementPage.vue'
 import SystemResourceTrendChart from '@/architecture/presentation/features/system/components/SystemResourceTrendChart.vue'
+import SystemDatabaseHistory from '../components/SystemDatabaseHistory.vue'
 import SystemUsagePanel from '@/architecture/presentation/features/system/components/SystemUsagePanel.vue'
 import SystemStorageAssetsPanel from '@/architecture/presentation/features/system/components/SystemStorageAssetsPanel.vue'
 import SystemBackupPanel from '@/architecture/presentation/features/system/components/SystemBackupPanel.vue'
@@ -752,6 +760,8 @@ import {
   getSystemResourceDiagnostics,
   listAuthLoginProviders,
   listLogArchiveBatches,
+  retryLogArchiveBatch,
+  type SystemDatabaseSize,
   updateSystemSettings,
   updateLoginAnnouncementConfig,
   updateAuthLoginProviderConfig,
@@ -793,11 +803,36 @@ const activeTab = ref<SettingsTab>(defaultSettingsTab)
 const connectorPanelKey = ref(0)
 const openapiPanelKey = ref(0)
 const usersPanelKey = ref(0)
-const backupPanelKey = ref(0)
+const backupPanel = ref<InstanceType<typeof SystemBackupPanel> | null>(null)
 const usagePanelKey = ref(0)
 const storageAssetsPanelKey = ref(0)
 const archivesLoading = ref(false)
 const archiveBatches = ref<LogArchiveBatch[]>([])
+const retryingArchive = ref<number | null>(null)
+const databaseHistoryDays = ref(7)
+const databaseHistoryName = ref('')
+const databaseHistoryOptions = ref<SystemDatabaseSize[]>([])
+let databaseRequestId = 0
+let lastDatabaseHistoryKey = ''
+const databaseLoadError = ref('')
+async function retryArchive(batch: LogArchiveBatch) {
+  if (retryingArchive.value !== null) return
+  retryingArchive.value = batch.id
+  try {
+    await retryLogArchiveBatch(batch.id)
+    ElMessage.success(t('systemSettings.archiveRetrySucceeded'))
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.msg || error?.message || t('systemSettings.archiveRetryFailed'))
+  } finally {
+    retryingArchive.value = null
+    await loadArchives()
+  }
+}
+function changeDatabaseHistory(days: number, name: string) {
+ databaseHistoryDays.value = days
+ databaseHistoryName.value = name
+ void loadResourceDatabases()
+}
 const archivePage = ref(1)
 const archivePageSize = 20
 const archiveTotal = ref(0)
@@ -879,7 +914,7 @@ const settingsDocSlugMap: Record<SettingsTab, KageosDocSlug> = {
   connectors: 'connectors',
   openapi: 'api',
   users: 'runtime',
-  dataBackup: 'runtime',
+  dataBackup: 'data-backup',
   backups: 'runtime',
   appearance: 'docs',
   language: 'docs',
@@ -936,12 +971,10 @@ const forecastDescription = computed(() => {
 const databaseInventory = computed(() => resourceOverview.value?.current.databases?.length
   ? resourceOverview.value.current.databases
   : resourceOverview.value?.current.largest_databases || [])
-const capacityDailyRows = computed(() => (resourceOverview.value?.capacity_history || [])
-  .slice(-7)
-  .reverse())
 const latestCapacityDaily = computed(() => resourceOverview.value?.capacity_history?.at(-1))
 
 watch(databaseScope, () => {
+  databaseHistoryName.value = ''
   databasePage.value = 1
   if (operationsTab.value === 'databases') void loadResourceDatabases()
 })
@@ -1130,7 +1163,7 @@ async function refreshActiveTab() {
     return
   }
   if (activeTab.value === 'dataBackup') {
-    backupPanelKey.value += 1
+    await backupPanel.value?.refresh()
     return
   }
   if (activeTab.value === 'backups') {
@@ -1156,6 +1189,7 @@ function handleTabChange(tabName: string | number) {
 }
 
 async function loadResources() {
+ if (operationsTab.value === 'databases') lastDatabaseHistoryKey = ''
 	await loadActiveOperationsTab(true)
 }
 
@@ -1255,6 +1289,14 @@ async function loadResourceStorage() {
 }
 
 async function loadResourceDatabases() {
+ const requestId = ++databaseRequestId
+ const historyKey = JSON.stringify([databaseScope.value, databaseHistoryDays.value, databaseHistoryName.value])
+ const includeHistory = historyKey !== lastDatabaseHistoryKey
+ databaseLoadError.value = ''
+ if (includeHistory) {
+  lastDatabaseHistoryKey = ''
+  if (resourceOverview.value) resourceOverview.value.capacity_history = []
+ }
 	resourcesLoading.value = true
 	try {
 		const result = await getSystemResourceDatabases({
@@ -1262,15 +1304,22 @@ async function loadResourceDatabases() {
 			page_size: databasePageSize,
 			scope: databaseScope.value,
 			keyword: databaseSearch.value.trim(),
-			include_history: !loadedOperationsTabs.databases,
+			include_history: includeHistory,
+ days: databaseHistoryDays.value,
+ database: databaseHistoryName.value,
 		})
+		if (requestId !== databaseRequestId) return
 		if (resourceOverview.value) {
 			resourceOverview.value.current.databases = result.items
 			resourceOverview.value.current.largest_databases = []
 			resourceOverview.value.current.database_logical_bytes = result.database_logical_bytes
 			resourceOverview.value.current.database_size_available = result.database_size_available
 			resourceOverview.value.current.database_inventory_complete = result.database_inventory_complete
-			if (result.capacity_history?.length) resourceOverview.value.capacity_history = result.capacity_history
+			if (includeHistory) {
+ resourceOverview.value.capacity_history = result.capacity_history || []
+ databaseHistoryOptions.value = result.history_databases || []
+ lastDatabaseHistoryKey = historyKey
+ }
 			resourceOverview.value.capacity_retention_days = result.capacity_retention_days
 			resourceOverview.value.capacity_schedule_local = result.capacity_schedule_local
 			resourceOverview.value.capacity_collected_at = result.collected_at
@@ -1280,9 +1329,11 @@ async function loadResourceDatabases() {
 		workspaceDatabaseCount.value = result.workspace_count
 		loadedOperationsTabs.databases = true
 	} catch (error: any) {
-		ElMessage.error(error?.response?.data?.msg || error?.message || t('systemSettings.resources.loadFailed'))
+		if (requestId !== databaseRequestId) return
+		databaseLoadError.value = error?.response?.data?.msg || error?.message || t('systemSettings.resources.loadFailed')
+ ElMessage.error(databaseLoadError.value)
 	} finally {
-		resourcesLoading.value = false
+		if (requestId === databaseRequestId) resourcesLoading.value = false
 	}
 }
 
@@ -1312,7 +1363,7 @@ async function loadResourceDiagnostics() {
 async function loadActiveOperationsTab(force = false) {
 	const tab = operationsTab.value
 	if (!force && loadedOperationsTabs[tab]) return
-	if (tab === 'overview') return loadResourceSummary()
+	if (tab === 'overview') { await loadResourceSummary(); if (resourceOverview.value) await loadResourceTrends(); return }
 	if (!resourceOverview.value) await loadResourceSummary()
 	if (tab === 'usage') {
 		loadedOperationsTabs.usage = true
@@ -1357,7 +1408,7 @@ function formatRate(value: number) {
 
 function formatSignedBytes(value: number) {
   if (!Number.isFinite(value)) return '-'
-  if (value === 0) return '0 B'
+  if (value === 0) return t('systemSettings.resources.dashboard.unchanged')
   return `${value > 0 ? '+' : '-'}${formatBytes(Math.abs(value))}`
 }
 
@@ -1404,14 +1455,8 @@ function formatResourceTime(value?: string) {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
 }
 
-function formatResourceDate(value?: string) {
-  if (!value) return '-'
-  const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString()
-}
-
 function databaseKindLabel(kind: string) {
-  return t(`systemSettings.resources.databaseKinds.${kind}`)
+  return kind === 'unmanaged' ? t('systemSettings.resources.dashboard.databaseScopeUnmanaged') : t(`systemSettings.resources.databaseKinds.${kind}`)
 }
 
 function databaseStatusLabel(status: string) {
@@ -1426,6 +1471,7 @@ function databaseStatusType(status: string): 'success' | 'warning' | 'danger' | 
 }
 
 function databasePurposeLabel(purpose: string) {
+  if (purpose === 'unmanaged_database') return t('systemSettings.resources.dashboard.databaseScopeUnmanaged')
   const translated = t(`systemSettings.resources.databasePurposes.${purpose}`)
   return translated.includes('systemSettings.resources.databasePurposes.') ? purpose : translated
 }
@@ -1454,6 +1500,7 @@ function collectionResult(error?: string) {
   const knownErrors: Record<string, string> = {
     'one or more platform metric sources are unavailable': 'platformSourceUnavailable',
     'application database metric source is unavailable': 'databaseSourceUnavailable',
+    'database metric source is unavailable': 'databaseSourceUnavailable',
     'runtime metrics collected but history persistence failed': 'runtimePersistenceFailed'
   }
   const key = knownErrors[error]
@@ -2618,4 +2665,26 @@ onBeforeUnmount(() => {
   .archive-detail-grid { padding-left: 8px; }
   .archive-detail-grid > div { grid-template-columns: 1fr; gap: 4px; }
 }
+
+.operations-pane { --dashboard-accent:#5985ed; }
+.resource-summary-grid { gap:16px; }
+.resource-summary-card { padding:22px; border-radius:14px; background:var(--bg-primary); }
+.resource-summary-card > strong { font-size:26px; letter-spacing:-.5px; font-variant-numeric:tabular-nums; }
+.platform-metric-grid { gap:14px; }
+.platform-metric-card { padding:20px; border-radius:14px; background:var(--bg-primary); border-top:3px solid var(--dashboard-accent); }
+.platform-metric-card strong { font-size:30px; font-variant-numeric:tabular-nums; }
+.database-inventory { padding:24px; }
+.database-inventory-heading h4 { font-size:22px; letter-spacing:-.5px; }
+.database-counts { flex-wrap:wrap; }
+.database-delta-grid { gap:16px; }
+.database-delta-grid article { background:var(--bg-primary); border-radius:14px; padding:20px 24px; }
+.database-delta-grid strong { font-size:28px; font-variant-numeric:tabular-nums; }
+.database-size-table :deep(.el-table__cell) { padding:14px 0; }
+.database-size-table :deep(.cell) { font-size:12px; }
+.database-source { display:block; color:var(--text-secondary); font-size:10px; margin-top:3px; }
+.archive-table :deep(.el-table__cell) { padding:16px 0; }
+.archive-policy-item { border-radius:14px; background:var(--bg-primary); padding:24px; }
+.monitoring-policy-strip { font-size:11px; opacity:.8; }
+.overview-trends :deep(.trend-card) { border-radius:14px; background:var(--bg-primary); }
+@media (max-width:720px) { .database-inventory { padding:12px; } .database-toolbar { flex-direction:column; align-items:stretch; } }
 </style>

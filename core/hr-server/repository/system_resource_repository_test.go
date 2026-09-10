@@ -102,3 +102,50 @@ func openSystemResourceTestDB(t *testing.T) *gorm.DB {
 	}
 	return db
 }
+
+func TestPartialCapacityRetryPreservesCompleteDailySnapshot(t *testing.T) {
+	db := openSystemResourceTestDB(t)
+	if err := db.AutoMigrate(&model.SystemCapacitySnapshot{}); err != nil {
+		t.Fatal(err)
+	}
+	repo := NewSystemResourceRepository(db)
+	now := time.Now()
+	if err := repo.CreateCapacity(dto.SystemResourceSnapshot{CollectedAt: now, DatabaseInventoryComplete: true, DatabaseLogicalBytes: 500}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.CreateCapacity(dto.SystemResourceSnapshot{CollectedAt: now, DatabaseInventoryComplete: false, DatabaseLogicalBytes: 100}); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := repo.LatestCapacity()
+	if err != nil || !saved.DatabaseInventoryComplete || saved.DatabaseLogicalBytes != 500 {
+		t.Fatalf("complete evidence replaced: %+v %v", saved, err)
+	}
+}
+
+func TestDatabaseDiscoveryIncludesUnassignedPhysicalSchemas(t *testing.T) {
+	db := openSystemResourceTestDB(t)
+	for _, query := range []string{
+		`ATTACH DATABASE ':memory:' AS information_schema`,
+		`CREATE TABLE information_schema.schemata (schema_name TEXT)`,
+		`CREATE TABLE information_schema.tables (table_schema TEXT, data_length INTEGER, index_length INTEGER)`,
+		`INSERT INTO information_schema.schemata VALUES ('hr-server'), ('custom-business'), ('mysql')`,
+		`INSERT INTO information_schema.tables VALUES ('hr-server',100,20), ('custom-business',200,30), ('mysql',999,999)`,
+	} {
+		if err := db.Exec(query).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	total, databases, available := NewSystemResourceRepository(db).CollectDatabaseSizes(t.Context())
+	if !available || total != 350 {
+		t.Fatalf("discovery total=%d available=%v", total, available)
+	}
+	found := false
+	for _, database := range databases {
+		if database.Name == "custom-business" {
+			found = database.Kind == "unmanaged" && database.UsedBytes == 230
+		}
+	}
+	if !found {
+		t.Fatalf("unassigned schema missing: %+v", databases)
+	}
+}

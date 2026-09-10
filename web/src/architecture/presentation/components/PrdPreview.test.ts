@@ -190,14 +190,14 @@ describe('PrdPreview', () => {
 
     expect(wrapper.text()).not.toContain('请确认是否按以上 PRD 创建服务目录和生成代码')
     expect(wrapper.find('textarea').exists()).toBe(false)
-    expect(wrapper.findAll('button').some(button => button.text().includes('确认 PRD'))).toBe(false)
+    expect(wrapper.findAll('button').some(button => button.text().includes('按此方案开始'))).toBe(false)
   })
 
   it('emits confirm payload when confirmation controls are explicitly enabled', async () => {
     const wrapper = mountPreview(baseData(), { showConfirmation: true })
 
     await wrapper.find('textarea').setValue('按这个做')
-    const confirmButton = wrapper.findAll('button').find(button => button.text().includes('确认 PRD'))
+    const confirmButton = wrapper.findAll('button').find(button => button.text().includes('按此方案开始'))
     expect(confirmButton).toBeTruthy()
     await confirmButton!.trigger('click')
 

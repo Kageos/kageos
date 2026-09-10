@@ -1,7 +1,6 @@
 import { computed, nextTick, ref, type Ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import type { ChatMessage } from '@/architecture/presentation/composables/useWorkspaceChatStream'
-import { collectMessageToolCalls } from '@/architecture/presentation/composables/useMiniWorkstationDebugCopy'
 import {
   createWorkspaceHandoff,
   recordWorkspaceInteractionEvent,
@@ -36,41 +35,9 @@ type StageInteractionArtifact = Record<string, unknown> & {
 export function useMiniWorkstationPendingInteraction(options: UseMiniWorkstationPendingInteractionOptions) {
   const handledInteractionKeys = ref<Set<string>>(new Set())
 
-  const pendingInteraction = computed<WorkspaceInteraction | null>(() => {
-    if (options.currentSessionDisablesPendingInteraction.value) return null
-    const auditedInteractionKeys = new Set<string>()
-    let hasUnscopedResolutionAfter = false
-    for (let i = options.messages.value.length - 1; i >= 0; i--) {
-      const message = options.messages.value[i]
-      if (!message) continue
-      if (isPrdHandoffMessage(message)) {
-        hasUnscopedResolutionAfter = true
-        continue
-      }
-      const auditedKey = getWorkspaceInteractionAuditResolutionKey(message)
-      if (auditedKey !== undefined) {
-        if (auditedKey) {
-          auditedInteractionKeys.add(auditedKey)
-        } else {
-          hasUnscopedResolutionAfter = true
-        }
-        continue
-      }
-      const calls = collectMessageToolCalls(message)
-      for (let j = calls.length - 1; j >= 0; j--) {
-        const call = calls[j]
-        if (!call) continue
-        const interaction = buildWorkspaceInteractionFromArtifact(call.result_data)
-        if (interaction?.card_type !== 'prd_confirmation' || interaction.artifact_kind !== 'agent_app_prd') continue
-        const key = getInteractionKey(interaction)
-        if (handledInteractionKeys.value.has(key) || auditedInteractionKeys.has(key) || hasUnscopedResolutionAfter) {
-          return null
-        }
-        return interaction
-      }
-    }
-    return null
-  })
+  // 阶段确认不再是会话级状态。历史消息即使带有 pending_confirmation，
+  // 也只在 PRD 预览中提供快捷确认，不恢复输入框卡点。
+  const pendingInteraction = computed<WorkspaceInteraction | null>(() => null)
 
   const composerBlocked = computed(() => {
     const interaction = pendingInteraction.value
@@ -343,12 +310,6 @@ export function buildWorkspaceInteractionFromArtifact(value: unknown): Workspace
   }
 }
 
-function isPrdHandoffMessage(message: ChatMessage) {
-  return message.role === 'user' &&
-    message.context_usage === 'artifact' &&
-    message.artifact_kind === 'agent_app_prd'
-}
-
 function getStageArtifactKey(artifact: unknown) {
   try {
     return JSON.stringify(artifact)
@@ -359,46 +320,6 @@ function getStageArtifactKey(artifact: unknown) {
 
 function getInteractionKey(interaction: WorkspaceInteraction) {
   return interaction.id || getStageArtifactKey(interaction.artifact) || `${interaction.status}:${interaction.card_type}`
-}
-
-function getWorkspaceInteractionAuditResolutionKey(message: ChatMessage): string | undefined {
-  if (message.artifact_kind !== 'workspace_interaction_event') return undefined
-  const raw = (message.raw_content || '').trim()
-  if (!raw) return workspaceInteractionAuditDisplayResolves(message.content) ? '' : undefined
-  try {
-    const event = JSON.parse(raw) as { kind?: unknown; interaction_id?: unknown; action?: unknown }
-    if (event.kind === 'workspace_interaction_event') {
-      if (!workspaceInteractionAuditActionResolves(typeof event.action === 'string' ? event.action : '')) {
-        return undefined
-      }
-      return typeof event.interaction_id === 'string' ? event.interaction_id : ''
-    }
-  } catch {
-    return workspaceInteractionAuditDisplayResolves(message.content) ? '' : undefined
-  }
-  return workspaceInteractionAuditDisplayResolves(message.content) ? '' : undefined
-}
-
-function workspaceInteractionAuditActionResolves(action: string) {
-  return [
-    'confirm_prd',
-    'revise_prd',
-    'cancel_prd',
-    'start_build_repair',
-    'continue_development',
-    'skip_build_repair',
-  ].includes(action)
-}
-
-function workspaceInteractionAuditDisplayResolves(content: string) {
-  const text = content || ''
-  if (text.includes('查看 PRD') || text.includes('查看构建诊断')) return false
-  return text.includes('确认 PRD') ||
-    text.includes('修改 PRD') ||
-    text.includes('取消 PRD') ||
-    text.includes('交接构建修复') ||
-    text.includes('继续修改') ||
-    text.includes('暂不修复')
 }
 
 function isComposerBlockingInteraction(interaction: WorkspaceInteraction) {

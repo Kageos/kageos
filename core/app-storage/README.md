@@ -4,7 +4,7 @@ App Storage is the MinIO-backed file service for kageos. It provides presigned u
 
 System administrators can manage the auditable file inventory from the first-level **System Settings → File Assets** section. The inventory is backed by `file_uploads` and `file_downloads`, supports workspace and service-directory filtering, image thumbnails plus in-page image/video/PDF previews, separate preview/download audit records, and deletion tombstones after the physical object is removed.
 
-This inventory intentionally covers files written through app-storage. Objects written directly to MinIO have no trustworthy service-path, uploader, or business meaning and are not presented as normal platform files. Detect those objects with a low-frequency reconciliation job rather than scanning the entire bucket on every page request. A MinIO console link is shown only when `storage.minio.console_url` or `MINIO_CONSOLE_URL` is configured (local `127.0.0.1:9000` development endpoints safely infer port `9001`).
+This inventory intentionally covers files written through app-storage. Objects written directly to MinIO have no trustworthy service-path, uploader, or business meaning and are not presented as normal platform files. Detect those objects with a low-frequency reconciliation job rather than scanning the entire bucket on every page request. The file-asset UI and API do not expose the MinIO operations console, even when a console URL is configured. Use the [private console access runbook](../../docs/minio-console-access.md) for production maintenance.
 
 ## Scope
 

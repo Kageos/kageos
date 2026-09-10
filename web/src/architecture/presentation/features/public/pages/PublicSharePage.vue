@@ -8,11 +8,12 @@
       <el-result
         v-else-if="errorMessage"
         icon="warning"
-        title="链接不可用"
-        :sub-title="errorMessage"
+        :title="unavailableTitle"
+        :sub-title="t('shareGovernance.unavailableHint')"
         class="public-share-result"
       >
         <template #extra>
+          <el-button :icon="Refresh" @click="loadShare">{{ t('common.refresh') }}</el-button>
           <el-button class="submission-entry-button" round plain :icon="Clock" @click="openSubmissionDrawer">
             查看我的提交记录
           </el-button>
@@ -174,6 +175,12 @@ const route = useRoute()
 const { t } = useI18n()
 const loading = ref(true)
 const errorMessage = ref('')
+const unavailableTitle = computed(() => {
+  if (errorMessage.value.includes('已关闭')) return t('publicSharePanel.statusDisabled')
+  if (errorMessage.value.includes('已过期')) return t('publicSharePanel.statusExpired')
+  if (errorMessage.value.includes('上限')) return t('shareGovernance.exhausted')
+  return t('shareGovernance.unavailable')
+})
 const view = ref<PublicShareView | null>(null)
 const functionDetail = ref<FunctionDetail | null>(null)
 const gateway = ref<PublicShareFormGateway | null>(null)

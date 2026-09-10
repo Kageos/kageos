@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/kageos/kageos/core/app-server/model"
@@ -41,6 +42,7 @@ func (r *LogArchiveRepository) GetResumable(ctx context.Context) (*model.LogArch
 	var batch model.LogArchiveBatch
 	err := r.db.WithContext(ctx).
 		Where("status IN ?", []string{model.LogArchiveStatusExporting, model.LogArchiveStatusUploaded, model.LogArchiveStatusFailed}).
+		Where("next_retry_at IS NULL OR next_retry_at <= ?", time.Now()).
 		Order("id ASC").First(&batch).Error
 	return &batch, err
 }
@@ -58,6 +60,7 @@ func (r *LogArchiveRepository) NextScope(ctx context.Context, cutoff time.Time) 
 	var row struct{ TenantUser, App string }
 	err := r.db.WithContext(ctx).Model(&model.OperateLog{}).
 		Select("tenant_user, app").Where("created_at < ?", cutoff).
+		Where(unclaimedArchiveLogs).
 		Order("created_at ASC, id ASC").Limit(1).Scan(&row).Error
 	if err != nil {
 		return "", "", err
@@ -72,6 +75,7 @@ func (r *LogArchiveRepository) SelectIDs(ctx context.Context, tenantUser, app st
 	var ids []int64
 	err := r.db.WithContext(ctx).Model(&model.OperateLog{}).Select("id").
 		Where("tenant_user = ? AND app = ? AND created_at < ?", tenantUser, app, cutoff).
+		Where(unclaimedArchiveLogs).
 		Order("id ASC").Limit(limit).Scan(&ids).Error
 	return ids, err
 }
@@ -141,3 +145,41 @@ func (r *LogArchiveRepository) DeleteRange(ctx context.Context, batch *model.Log
 }
 
 func IsArchiveNotFound(err error) bool { return errors.Is(err, gorm.ErrRecordNotFound) }
+
+// Serialize scheduled and manual runs across processes on a dedicated connection.
+// A connection lock is released by MySQL if a worker crashes; no long SQL transaction
+// is held while uploading. SQLite is only used by local tests.
+var archiveTestMutex sync.Mutex
+
+func (r *LogArchiveRepository) Exclusive(ctx context.Context, run func(*LogArchiveRepository) error) error {
+	if r.db.Dialector.Name() != "mysql" {
+		if !archiveTestMutex.TryLock() {
+			return fmt.Errorf("archive task is already running")
+		}
+		defer archiveTestMutex.Unlock()
+		return run(r)
+	}
+	return r.db.WithContext(ctx).Connection(func(db *gorm.DB) error {
+		var acquired int
+		if err := db.Raw("SELECT GET_LOCK('kageos.log_archive', 0)").Scan(&acquired).Error; err != nil {
+			return err
+		}
+		if acquired != 1 {
+			return fmt.Errorf("archive task is already running")
+		}
+		defer db.WithContext(context.WithoutCancel(ctx)).Exec("SELECT RELEASE_LOCK('kageos.log_archive')")
+		return run(NewLogArchiveRepository(db))
+	})
+}
+
+func (r *LogArchiveRepository) Get(ctx context.Context, id int64) (*model.LogArchiveBatch, error) {
+	var batch model.LogArchiveBatch
+	err := r.db.WithContext(ctx).First(&batch, id).Error
+	return &batch, err
+}
+
+const unclaimedArchiveLogs = `NOT EXISTS (
+ SELECT 1 FROM log_archive_batches b WHERE b.deleted_at IS NULL
+ AND b.status <> 'completed' AND b.tenant_user = operate_logs.tenant_user
+ AND b.app = operate_logs.app AND operate_logs.id BETWEEN b.min_log_id AND b.max_log_id
+)`

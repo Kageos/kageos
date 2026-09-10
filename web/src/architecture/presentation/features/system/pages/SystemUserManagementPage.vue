@@ -23,11 +23,13 @@
           <el-button :icon="Refresh" :loading="loading" @click="loadUsers">{{ t('common.refresh') }}</el-button>
         </el-form-item>
       </el-form>
+      <el-button @click="importVisible = true">{{ t('userImport.title') }}</el-button>
       <el-button type="primary" :icon="Plus" @click="openCreateDialog">
         {{ t('systemUser.create') }}
       </el-button>
     </div>
 
+    <SystemUserImportDialog v-model="importVisible" @created="loadUsers" />
     <div class="user-summary">
       <div class="summary-item">
         <span class="summary-value">{{ total }}</span>
@@ -238,6 +240,7 @@ import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { CircleCheck, CircleClose, Clock, EditPen, Key, MoreFilled, Plus, Refresh, Search } from '@element-plus/icons-vue'
 import type { UserInfo } from '@/architecture/domain/types'
+import SystemUserImportDialog from '../components/SystemUserImportDialog.vue'
 import UserAvatar from '@/architecture/presentation/shared/components/UserAvatar.vue'
 import {
   createSystemUser,
@@ -247,6 +250,7 @@ import {
   updateSystemUserStatus,
 } from '@/architecture/presentation/context/api/user'
 
+const importVisible = ref(false)
 const { t } = useI18n()
 
 const loading = ref(false)
@@ -419,20 +423,19 @@ async function resetPassword() {
 }
 
 async function handleStatusCommand(user: UserInfo, status: string) {
-  if (user.status === status) {
-    return
-  }
   try {
-    await ElMessageBox.confirm(
+    const { value: reason } = await ElMessageBox.prompt(
       t('systemUser.statusConfirm', { username: user.username, status: statusLabel(status) }),
       t('systemUser.statusAction'),
       {
         type: status === 'disabled' ? 'warning' : 'info',
+        inputPlaceholder: t('userImport.reason'),
+        inputValidator: (value: string) => !!value?.trim() && value.trim().length <= 500 || t('userImport.reason'),
         confirmButtonText: t('common.confirm'),
         cancelButtonText: t('common.cancel'),
       }
     )
-    await updateSystemUserStatus(user.username, status as 'active' | 'pending' | 'disabled')
+    await updateSystemUserStatus(user.username, status as 'active' | 'pending' | 'disabled', reason.trim())
     ElMessage.success(t('systemUser.statusUpdated'))
     await loadUsers()
   } catch (error: any) {
@@ -453,7 +456,7 @@ async function handleUserActionCommand(user: UserInfo, command: string) {
 }
 
 function isStatusActionDisabled(user: UserInfo, status: string) {
-  return user.username === 'system' || user.status === status
+  return user.username === 'system' || (user.status === status && status === 'active')
 }
 
 function normalizeUserCodeInput(value: string | number) {

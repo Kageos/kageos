@@ -289,13 +289,13 @@ func workspaceInteractionEventDisplayContent(req *dto.RecordWorkspaceInteraction
 func workspaceInteractionActionLabel(action string) string {
 	switch strings.TrimSpace(action) {
 	case "view_prd":
-		return "查看 PRD"
+		return "查看方案"
 	case "confirm_prd":
-		return "确认 PRD"
+		return "按此方案开始"
 	case "revise_prd":
-		return "修改 PRD"
+		return "调整方案"
 	case "cancel_prd":
-		return "取消 PRD"
+		return "暂不使用"
 	case "view_build_diagnostics":
 		return "查看构建诊断"
 	case "start_build_repair":

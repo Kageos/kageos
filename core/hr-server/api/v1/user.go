@@ -370,7 +370,7 @@ func (u *User) CreateOpenAPIToken(c *gin.Context) {
 		response.FailWithMessage(c, "当前用户不存在: "+err.Error())
 		return
 	}
-	result, err := u.openAPITokenStore.Create(openapitoken.CreateInput{
+	result, err := u.userService.CreateActiveUserOpenAPIToken(contextx.ToContext(c), u.openAPITokenStore, openapitoken.CreateInput{
 		OwnerUsername:      username,
 		OwnerUserID:        currentUser.ID,
 		OwnerEmail:         currentUser.Email,

@@ -41,6 +41,11 @@
   z-index: var(--aos-z-floating-popper) !important;
 }
 
+/* 引用菜单 teleport 到 body，必须高于工作台窗口及数字员工编辑弹层。 */
+.spc-mention-popover.el-popper {
+  z-index: var(--aos-z-floating-popper) !important;
+}
+
 /* 全局消息不能被 mini 工作台挡住，例如网络错误、复制成功、校验失败。 */
 .el-message {
   z-index: var(--aos-z-notification) !important;

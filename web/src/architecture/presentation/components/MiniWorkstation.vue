@@ -401,7 +401,12 @@ const { messages, sending, sessionId, streamingDisplayLength, send: sendMessage,
 const rootRef = ref<HTMLElement>()
 const outputRef = ref<HTMLElement>()
 const inputText = ref('')
-const inputRef = ref<{ focus: () => void; focusAtEnd?: () => void }>()
+type WorkstationInputRef = {
+  focus: () => void
+  focusAtEnd?: () => void
+  insertWorkspaceResources?: (paths: string[]) => void
+}
+const inputRef = ref<WorkstationInputRef>()
 const llmSelectOpen = ref(false)
 const settingsPopoverOpen = ref(false)
 const showScheduledAgentTaskDialog = ref(false)
@@ -481,7 +486,7 @@ function resetOutputScrollState() {
   savedOutputWasNearBottom.value = true
 }
 
-function registerInputRef(element: { focus: () => void; focusAtEnd?: () => void } | null) {
+function registerInputRef(element: WorkstationInputRef | null) {
   inputRef.value = element || undefined
 }
 
@@ -1717,7 +1722,9 @@ useMiniWorkstationEffects({
 
 .mini-ws:not(.mini-ws--maximized) .mini-ws-output :deep(.mini-ws-empty) {
   min-height: 36px;
-  justify-content: flex-start;
+  width: 100%;
+  justify-content: center;
+  text-align: center;
   font-size: 12px;
   letter-spacing: 0;
   text-transform: none;

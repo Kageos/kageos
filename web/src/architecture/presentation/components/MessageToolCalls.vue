@@ -53,14 +53,10 @@
               <PrdPreview
                 :data="tc.result_data"
                 :confirm-disabled="confirmDisabled"
+                show-confirmation
                 @confirm="emit('confirm-prd', $event)"
               />
             </div>
-            <BuildWorkspaceDiagnosticsCard
-              v-else-if="isBuildWorkspaceFailureToolCall(tc)"
-              :tool-call="tc"
-              class="mini-msg-build-diagnostics"
-            />
             <div
               v-else
               :class="['message-tool-calls-viewport', { 'message-tool-calls-viewport--first': idx === 0 }]"
@@ -106,7 +102,6 @@ import { Loading, CircleCheck, CircleClose } from '@element-plus/icons-vue'
 import OutputFilesDisplay from './OutputFilesDisplay.vue'
 import OutputDisplayFields from './OutputDisplayFields.vue'
 import PrdPreview from './PrdPreview.vue'
-import BuildWorkspaceDiagnosticsCard from './BuildWorkspaceDiagnosticsCard.vue'
 import type { WorkspaceChatToolCallSummary } from '@/architecture/presentation/context/api/workspace'
 import type { OutputFileGroup } from '@/architecture/presentation/composables/useOutputFileGroups'
 import { extractAllDisplayFields } from '@/architecture/presentation/composables/useOutputDisplayFields'
@@ -153,7 +148,7 @@ const summaryToolGroups = computed(() => allSummaryToolGroups.value.slice(0, 4))
 const hiddenToolGroupCount = computed(() => Math.max(0, allSummaryToolGroups.value.length - summaryToolGroups.value.length))
 const errorCount = computed(() => visibleToolCalls.value.filter((t) => t.status === 'error').length)
 const hasInlinePreviewToolCall = computed(() =>
-  visibleToolCalls.value.some((tc) => isRenderablePrdToolCall(tc) || isBuildWorkspaceFailureToolCall(tc))
+  visibleToolCalls.value.some((tc) => isRenderablePrdToolCall(tc))
 )
 const detailsOpen = ref(hasInlinePreviewToolCall.value)
 
@@ -294,13 +289,6 @@ function onDetailsToggle(event: Event) {
 
 function isRenderablePrdToolCall(tc: WorkspaceChatToolCallSummary): boolean {
   return tc.name === 'write_prd' && tc.status === 'ok' && tc.result_data != null
-}
-
-function isBuildWorkspaceFailureToolCall(tc: WorkspaceChatToolCallSummary): boolean {
-  return tc.name === 'build_workspace' &&
-    tc.result_data != null &&
-    typeof tc.result_data === 'object' &&
-    (tc.result_data as { kind?: string }).kind === 'agent_app_build_failure'
 }
 
 function getToolDisplayName(tc: WorkspaceChatToolCallSummary): string {

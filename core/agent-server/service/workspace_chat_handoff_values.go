@@ -119,9 +119,9 @@ func defaultWorkspaceHandoffDisplayContent(artifactKind, targetRole, remark stri
 	switch artifactKind {
 	case "agent_app_prd":
 		if strings.TrimSpace(remark) != "" {
-			return "已确认 PRD，开始创建目录和生成代码。\n\n补充备注：\n" + strings.TrimSpace(remark)
+			return "已按此方案开始制作。\n\n补充说明：\n" + strings.TrimSpace(remark)
 		}
-		return "已确认 PRD，开始创建目录和生成代码。"
+		return "已按此方案开始制作。"
 	case workspaceBuildArtifactKind:
 		if strings.TrimSpace(remark) != "" {
 			return "已构建成功，进入自动测试验证。\n\n补充备注：\n" + strings.TrimSpace(remark)

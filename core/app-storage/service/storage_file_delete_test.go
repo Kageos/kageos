@@ -67,6 +67,7 @@ func newDeleteTestService(t *testing.T) (*StorageService, *repository.FileReposi
 
 func TestGetSystemStorageAssetsFiltersByServicePathAndIncludesAuditSummary(t *testing.T) {
 	service, repo, _ := newDeleteTestService(t)
+	service.cfg.Storage.MinIO.ConsoleURL = "https://ops.example.invalid"
 	alice := "alice"
 	bob := "bob"
 	createDeleteTestRecord(t, repo, &model.FileUpload{
@@ -89,6 +90,9 @@ func TestGetSystemStorageAssetsFiltersByServicePathAndIncludesAuditSummary(t *te
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if result.ConsoleURL != "" {
+		t.Fatal("asset API must not disclose operations console")
 	}
 	if result.Total != 1 || len(result.List) != 1 || result.List[0].DownloadCount != 1 || result.List[0].PreviewCount != 1 {
 		t.Fatalf("unexpected asset result: %#v", result)

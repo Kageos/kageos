@@ -79,15 +79,14 @@ type writePRDChart struct {
 }
 
 type writePRDResultData struct {
-	Kind          string               `json:"kind" schema_desc:"固定为 agent_app_prd" schema_required:"true"`
-	SchemaVersion string               `json:"schema_version" schema_desc:"固定为 prd.v2" schema_required:"true"`
-	Project       writePRDProject      `json:"project" schema_desc:"项目和目录信息" schema_required:"true"`
-	Tables        []writePRDTable      `json:"tables,omitempty" schema_desc:"业务数据表和表格页语义"`
-	Forms         []writePRDForm       `json:"forms,omitempty" schema_desc:"独立提交入口"`
-	Charts        []writePRDChart      `json:"charts,omitempty" schema_desc:"统计图表"`
-	Rules         []string             `json:"rules,omitempty" schema_desc:"业务规则"`
-	Interaction   *writePRDInteraction `json:"interaction,omitempty" schema_desc:"PRD 交互状态和允许动作；用于前端固定展示确认入口"`
-	Issues        []string             `json:"issues,omitempty" schema_desc:"PRD 结构问题；非空时本次工具返回错误"`
+	Kind          string          `json:"kind" schema_desc:"固定为 agent_app_prd" schema_required:"true"`
+	SchemaVersion string          `json:"schema_version" schema_desc:"固定为 prd.v2" schema_required:"true"`
+	Project       writePRDProject `json:"project" schema_desc:"项目和目录信息" schema_required:"true"`
+	Tables        []writePRDTable `json:"tables,omitempty" schema_desc:"业务数据表和表格页语义"`
+	Forms         []writePRDForm  `json:"forms,omitempty" schema_desc:"独立提交入口"`
+	Charts        []writePRDChart `json:"charts,omitempty" schema_desc:"统计图表"`
+	Rules         []string        `json:"rules,omitempty" schema_desc:"业务规则"`
+	Issues        []string        `json:"issues,omitempty" schema_desc:"PRD 结构问题；非空时本次工具返回错误"`
 }
 
 var writePRDToolDef = toolDefinitionWithOutput[writePRDArgs, structuredToolResultSchema[writePRDResultData]](
@@ -111,8 +110,7 @@ func (t *WritePRDTool) Execute(ctx context.Context, call ToolCall) ToolResult {
 	if len(result.Issues) > 0 {
 		return toolResultWithStructuredData(result, true, writePRDIssueContent(result.Issues))
 	}
-	result.Interaction = pendingPRDInteraction()
-	return toolResultWithStructuredData(result, false, "PRD 已生成，请确认后我再进入开发。看不到按钮也可以直接回复：确认 PRD / 修改 PRD：xxx / 取消 PRD。")
+	return toolResultWithStructuredData(result, false, "方案已生成。用户可点击“按此方案开始”快捷进入开发，也可以继续补充或修改需求；方案预览不阻塞后续对话。")
 }
 
 func validateWritePRDRawShape(args map[string]interface{}) []string {

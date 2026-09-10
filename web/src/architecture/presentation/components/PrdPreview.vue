@@ -446,7 +446,6 @@ const confirmationQuestion = computed(() => {
   const refs = functionCards.value.map(item => item.title).filter(item => item !== '—')
   return t('prdPreview.confirmationQuestion', {
     name: display(project.value.name),
-    code: display(project.value.code),
     functions: refs.join('、') || t('prdPreview.aboveFunctions'),
   })
 })

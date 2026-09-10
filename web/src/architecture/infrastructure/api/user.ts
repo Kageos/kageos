@@ -181,6 +181,11 @@ export function resetSystemUserPassword(username: string, password: string) {
   return post<SystemUserResp>(`/hr/api/v1/system/users/${encodeURIComponent(username)}/password`, { password })
 }
 
-export function updateSystemUserStatus(username: string, status: 'active' | 'pending' | 'disabled') {
-  return put<SystemUserResp>(`/hr/api/v1/system/users/${encodeURIComponent(username)}/status`, { status })
+export function updateSystemUserStatus(username: string, status: 'active' | 'pending' | 'disabled', reason = '') {
+  return put<SystemUserResp>(`/hr/api/v1/system/users/${encodeURIComponent(username)}/status`, { status, reason })
+}
+
+export interface SystemImportUserResult { row: number; username: string; status: 'ready' | 'created' | 'failed'; message?: string }
+export function importSystemUsers(rows: SystemCreateUserReq[], preview: boolean) {
+  return post<{ rows: SystemImportUserResult[] }>('/hr/api/v1/system/users/import', { rows, preview })
 }

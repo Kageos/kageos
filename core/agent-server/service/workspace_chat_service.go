@@ -282,21 +282,6 @@ func (s *WorkspaceChatService) WorkspaceChatStream(ctx context.Context, req *dto
 	if session.Status == model.ChatSessionStatusGenerating {
 		return s.handleError(sendEvent, "该会话正在执行中，请等待当前任务完成，或先取消后再继续。", nil)
 	}
-	if !req.Resume && workspaceSessionHasPendingInteractionStatus(session.Status) {
-		pendingInteraction := s.pendingInteractionForSession(session)
-		if pendingInteraction == nil {
-			pendingInteraction = workspaceFallbackPendingInteraction(session.Status)
-		}
-		interactionAction := strings.TrimSpace(req.Message.InteractionAction)
-		if pendingInteraction != nil && pendingInteraction.Blocking &&
-			(!workspaceInteractionActionCanRunModel(interactionAction) || !workspaceInteractionAllowsAction(pendingInteraction, interactionAction)) {
-			title := strings.TrimSpace(pendingInteraction.Title)
-			if title == "" {
-				title = "当前会话有待处理确认"
-			}
-			return s.handleError(sendEvent, title+"，请先处理工作台交互卡片后再继续。", nil)
-		}
-	}
 	modeProvider := requestedModeProvider
 	if modeCode != requestedModeCode || modeProvider == nil {
 		modeProvider = prompt.ResolveModeProvider(ctx, modeCode)

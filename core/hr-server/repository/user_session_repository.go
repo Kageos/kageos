@@ -1,6 +1,8 @@
 package repository
 
 import (
+	"fmt"
+	"gorm.io/gorm/clause"
 	"time"
 
 	"github.com/kageos/kageos/core/hr-server/model"
@@ -110,4 +112,18 @@ func (r *UserSessionRepository) GetActiveSessionsByUserID(userID int64) ([]*mode
 		return nil, err
 	}
 	return sessions, nil
+}
+
+// CreateActiveUserSession serializes session issuance with account freezing.
+func (r *UserSessionRepository) CreateActiveUserSession(userID int64, token, refreshToken string, expiresAt models.Time) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		var user model.User
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&user, userID).Error; err != nil {
+			return err
+		}
+		if !user.IsActive() {
+			return fmt.Errorf("账户已停用")
+		}
+		return NewUserSessionRepository(tx).CreateUserSession(userID, token, refreshToken, expiresAt, "", "")
+	})
 }

@@ -36,6 +36,8 @@ type LogArchiveBatch struct {
 	SHA256           string          `json:"sha256" gorm:"type:char(64)"`
 	Status           string          `json:"status" gorm:"type:varchar(30);not null;index"`
 	SummaryJSON      json.RawMessage `json:"summary_json" gorm:"type:json"`
+	Attempts         int             `json:"attempts"`
+	NextRetryAt      *time.Time      `json:"next_retry_at,omitempty" gorm:"index"`
 	ErrorMessage     string          `json:"error_message" gorm:"type:text"`
 	ObjectVerifiedAt *time.Time      `json:"object_verified_at,omitempty"`
 	ArchivedAt       *time.Time      `json:"archived_at,omitempty"`

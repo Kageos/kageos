@@ -96,13 +96,13 @@ describe('appendWorkspaceResourceTokens', () => {
 })
 
 describe('workspace node drop', () => {
-  it('focuses the composer at the end after appending dragged resources', async () => {
+  it('lets the composer insert dragged resources at its remembered caret', async () => {
     const inputText = ref('分析 ')
-    const focusAtEnd = vi.fn()
+    const insertWorkspaceResources = vi.fn()
     const uploads = useMiniWorkstationUploads({
       fullCodePath: ref('/system/sales'),
       inputText,
-      inputRef: ref({ focus: vi.fn(), focusAtEnd }),
+      inputRef: ref({ focus: vi.fn(), insertWorkspaceResources }),
     })
 
     await uploads.onDrop({
@@ -113,7 +113,7 @@ describe('workspace node drop', () => {
       },
     } as unknown as DragEvent)
 
-    expect(inputText.value).toBe('分析 </system/sales/customers.table>')
-    expect(focusAtEnd).toHaveBeenCalledOnce()
+    expect(inputText.value).toBe('分析 ')
+    expect(insertWorkspaceResources).toHaveBeenCalledWith(['/system/sales/customers.table'])
   })
 })

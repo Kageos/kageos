@@ -142,6 +142,8 @@ export interface LogArchiveResourceSummary {
 }
 
 export interface LogArchiveBatch {
+  attempts?: number
+  next_retry_at?: string
   id: number
   archive_key: string
   archive_type: string
@@ -260,6 +262,7 @@ export interface SystemResourceHistoryPoint {
 }
 
 export interface SystemDatabaseSize {
+  source_id?: string
   name: string
   kind: 'platform' | 'workspace' | string
   owner: string
@@ -307,6 +310,8 @@ export interface StorageExpansionForecast {
 }
 
 export interface SystemCapacityDailyPoint {
+  previous_collected_at?: string
+  date?: string
   collected_at: string
   database_logical_bytes: number
   database_logical_delta: number
@@ -367,6 +372,7 @@ export interface SystemResourceStorage {
 }
 
 export interface SystemResourceDatabaseList {
+  history_databases?: SystemDatabaseSize[]
   items: SystemDatabaseSize[]
   total: number
   page: number
@@ -506,6 +512,10 @@ export function listLoginMethods() {
   return get<ListLoginMethodsResp>('/hr/api/v1/auth/methods')
 }
 
+export function retryLogArchiveBatch(id: number) {
+  return post<{ id: number }>(`/workspace/api/v1/system/log_archives/${id}/retry`, {}, { timeout: 600000 })
+}
+
 export function listLogArchiveBatches(page = 1, pageSize = 20) {
   return get<ListLogArchiveBatchesResp>('/workspace/api/v1/system/log_archives', { page, page_size: pageSize })
 }
@@ -529,7 +539,7 @@ export function getSystemResourceStorage() {
   return get<SystemResourceStorage>('/hr/api/v1/system/settings/resources/storage')
 }
 
-export function getSystemResourceDatabases(params: { page?: number; page_size?: number; scope?: string; keyword?: string; include_history?: boolean } = {}) {
+export function getSystemResourceDatabases(params: { page?: number; page_size?: number; scope?: string; keyword?: string; include_history?: boolean; days?: number; database?: string } = {}) {
   return get<SystemResourceDatabaseList>('/hr/api/v1/system/settings/resources/databases', params)
 }
 

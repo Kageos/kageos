@@ -198,6 +198,7 @@ type SystemResourceHistoryPoint struct {
 }
 
 type SystemDatabaseSize struct {
+	SourceID  string `json:"source_id,omitempty"`
 	Name      string `json:"name"`
 	Kind      string `json:"kind"`
 	Owner     string `json:"owner"`
@@ -205,6 +206,14 @@ type SystemDatabaseSize struct {
 	Purpose   string `json:"purpose"`
 	Status    string `json:"status"`
 	UsedBytes uint64 `json:"used_bytes"`
+}
+
+// Key distinguishes same-named schemas on separate configured MySQL instances.
+func (database SystemDatabaseSize) Key() string {
+	if database.SourceID == "" {
+		return database.Name
+	}
+	return database.SourceID + "/" + database.Name
 }
 
 type SystemPlatformServiceStats struct {
@@ -284,6 +293,7 @@ type SystemUsageOverviewResp struct {
 }
 
 type SystemDatabaseCapacityStats struct {
+	Error      string               `json:"error,omitempty"`
 	Available  bool                 `json:"available"`
 	TotalBytes uint64               `json:"total_bytes"`
 	Databases  []SystemDatabaseSize `json:"databases"`
@@ -328,17 +338,19 @@ type StorageExpansionForecast struct {
 }
 
 type SystemCapacityDailyPoint struct {
-	CollectedAt                   time.Time `json:"collected_at"`
-	DatabaseLogicalBytes          uint64    `json:"database_logical_bytes"`
-	DatabaseLogicalDelta          int64     `json:"database_logical_delta"`
-	DatabaseLogicalDeltaAvailable bool      `json:"database_logical_delta_available"`
-	DatabaseCount                 int       `json:"database_count"`
-	DatabaseCountDelta            int       `json:"database_count_delta"`
-	DatabaseCountDeltaAvailable   bool      `json:"database_count_delta_available"`
-	PlatformDatabaseCount         int       `json:"platform_database_count"`
-	WorkspaceDatabaseCount        int       `json:"workspace_database_count"`
-	DatabaseSizeAvailable         bool      `json:"database_size_available"`
-	DatabaseCountAvailable        bool      `json:"database_count_available"`
+	PreviousCollectedAt           *time.Time `json:"previous_collected_at,omitempty"`
+	Date                          string     `json:"date"`
+	CollectedAt                   time.Time  `json:"collected_at"`
+	DatabaseLogicalBytes          uint64     `json:"database_logical_bytes"`
+	DatabaseLogicalDelta          int64      `json:"database_logical_delta"`
+	DatabaseLogicalDeltaAvailable bool       `json:"database_logical_delta_available"`
+	DatabaseCount                 int        `json:"database_count"`
+	DatabaseCountDelta            int        `json:"database_count_delta"`
+	DatabaseCountDeltaAvailable   bool       `json:"database_count_delta_available"`
+	PlatformDatabaseCount         int        `json:"platform_database_count"`
+	WorkspaceDatabaseCount        int        `json:"workspace_database_count"`
+	DatabaseSizeAvailable         bool       `json:"database_size_available"`
+	DatabaseCountAvailable        bool       `json:"database_count_available"`
 }
 
 type SystemResourceOverviewResp struct {
@@ -391,6 +403,7 @@ type SystemResourceStorageResp struct {
 }
 
 type SystemResourceDatabaseListResp struct {
+	HistoryDatabases          []SystemDatabaseSize       `json:"history_databases,omitempty"`
 	Items                     []SystemDatabaseSize       `json:"items"`
 	Total                     int                        `json:"total"`
 	Page                      int                        `json:"page"`

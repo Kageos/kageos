@@ -85,6 +85,7 @@ func (s *SystemSettings) GetResourceDatabases(c *gin.Context) {
 		c.Query("scope"),
 		c.Query("keyword"),
 		c.DefaultQuery("include_history", "true") != "false",
+		service.DatabaseHistoryOptions{Days: queryPositiveInt(c, "days", 7), Name: c.Query("database")},
 	)
 	if err != nil {
 		response.FailWithMessage(c, "获取数据库资产失败: "+err.Error())

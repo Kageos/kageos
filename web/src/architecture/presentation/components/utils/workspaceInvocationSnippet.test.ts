@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   buildWorkspaceInvocationSnippet,
   filterEmptyInvocationParams,
+  insertWorkspaceResourceTokensAtOffset,
   parseWorkspaceInvocationBlocks,
   parseWorkspacePromptSegments,
   renderWorkspaceResourceTokensAsHtml,
@@ -39,6 +40,17 @@ describe('workspaceInvocationSnippet', () => {
       path: '/system/app/search.form',
       text: '</system/app/search.form>',
     })
+  })
+
+  it('inserts dragged resources at the caret with readable spacing', () => {
+    const result = insertWorkspaceResourceTokensAtOffset(
+      '请检查然后总结',
+      ['/system/sales/customers.table'],
+      3
+    )
+
+    expect(result.value).toBe('请检查 </system/sales/customers.table> 然后总结')
+    expect(result.cursor).toBe('请检查 </system/sales/customers.table> '.length)
   })
 
   it('splits relative resource tokens with a resolved segment path', () => {

@@ -50,7 +50,9 @@ func (r *PublicShareRepository) List(ctx context.Context, tenantUser, app string
 	}
 	switch strings.TrimSpace(filter.Status) {
 	case "enabled":
-		query = query.Where("enabled = ? AND (expires_at IS NULL OR expires_at > ?)", true, time.Now())
+		query = query.Where("enabled = ? AND (expires_at IS NULL OR expires_at > ?) AND (max_uses = 0 OR use_count < max_uses)", true, time.Now())
+	case "exhausted":
+		query = query.Where("enabled = ? AND (expires_at IS NULL OR expires_at > ?) AND max_uses > 0 AND use_count >= max_uses", true, time.Now())
 	case "disabled":
 		query = query.Where("enabled = ?", false)
 	case "expired":

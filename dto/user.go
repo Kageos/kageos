@@ -101,5 +101,18 @@ type ChangeOwnPasswordReq struct {
 
 // SystemUpdateUserStatusReq system 用户管理：更新用户状态
 type SystemUpdateUserStatusReq struct {
+	Reason string `json:"reason" binding:"max=500"`
 	Status string `json:"status" binding:"required,oneof=active pending disabled" example:"disabled"`
+}
+
+// SystemImportUsersReq contains bounded import rows; preview never writes accounts.
+type SystemImportUsersReq struct {
+	Rows    []SystemCreateUserReq `json:"rows" binding:"required,min=1,max=100"`
+	Preview bool                  `json:"preview"`
+}
+type SystemImportUserResult struct {
+	Row      int    `json:"row"`
+	Username string `json:"username"`
+	Status   string `json:"status"`
+	Message  string `json:"message,omitempty"`
 }

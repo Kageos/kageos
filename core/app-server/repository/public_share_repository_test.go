@@ -94,3 +94,28 @@ func TestPublicShareReleaseUseReturnsReservation(t *testing.T) {
 		t.Fatalf("released reservation should be reusable: %v", err)
 	}
 }
+
+func TestPublicShareListSeparatesExhaustedLinks(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.PublicShare{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, share := range []model.PublicShare{
+		{ShareID: "available", TenantUser: "owner", App: "ops", Enabled: true, MaxUses: 2, UseCount: 1},
+		{ShareID: "exhausted", TenantUser: "owner", App: "ops", Enabled: true, MaxUses: 2, UseCount: 2},
+	} {
+		if err := db.Create(&share).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	repo := NewPublicShareRepository(db)
+	for status, expected := range map[string]string{"enabled": "available", "exhausted": "exhausted"} {
+		rows, err := repo.List(context.Background(), "owner", "ops", PublicShareListFilter{Status: status})
+		if err != nil || len(rows) != 1 || rows[0].ShareID != expected {
+			t.Fatalf("%s: %+v %v", status, rows, err)
+		}
+	}
+}

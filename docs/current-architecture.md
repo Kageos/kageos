@@ -420,7 +420,7 @@ sequenceDiagram
 
 ## App Runtime 容器生命周期
 
-`app-runtime` 管的是“应用版本”，不是泛泛的容器。每次发布会生成一个新版本容器；旧版本会通过 SDK 控制主题优雅关闭，运行中请求完成后再停容器。
+`app-runtime` 管的是“应用版本”，不是泛泛的容器。每次发布会生成一个新版本容器；旧版本会通过 SDK 控制主题优雅关闭。SDK 在同一个停机门禁下原子地停止新请求准入并记录每个活动 handler；只有活动请求全部返回、资源清理完成后才发送 `close` 生命周期通知。runtime 等待 `close` 超时时只跳过本轮清理并保留旧容器，不强制停止长时间函数。
 
 ```mermaid
 flowchart LR
@@ -450,6 +450,16 @@ flowchart LR
   runtime -.->|"Publish app.v1.cmd.control.user.app.version shutdown"| bus
   bus -.->|"Startup close discovery events"| runtime
 ```
+
+旧版本排空的具体语义：
+
+1. app-server 将当前版本切换到已健康的新容器，新请求不再主动路由到旧版本。
+2. runtime 向旧版本发送 `shutdown` 控制命令。
+3. SDK 原子地关闭准入门禁；已经登记的 handler 继续执行，后到请求返回 `application is draining`。
+4. SDK 持续等待活动 handler 归零，不使用固定 30 秒强制退出。
+5. SDK 取消订阅、清理本地资源并发送 `close`；runtime 收到后才停止该版本容器。
+
+这个保证覆盖由 SDK 同步 handler 承载的函数。如果业务 handler 自行启动 goroutine 后提前返回，该后台工作不在请求排空边界内；这类长任务应使用可持久化的 Job/调度执行模型。
 
 ## AI 工作台生成和发布链路
 

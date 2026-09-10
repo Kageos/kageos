@@ -2,6 +2,7 @@ package v1
 
 import (
 	"context"
+	"net/http"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -115,7 +116,7 @@ func (s *SystemUser) UpdateStatus(c *gin.Context) {
 		response.FailWithMessage(c, "请求参数错误: "+err.Error())
 		return
 	}
-	user, err := s.userService.UpdateUserStatusFromSystem(contextx.ToContext(c), usernameParam(c), req.Status)
+	user, err := s.userService.UpdateUserStatusFromSystem(contextx.ToContext(c), usernameParam(c), req.Status, contextx.GetRequestUser(c), req.Reason)
 	if err != nil {
 		response.FailWithMessage(c, "更新用户状态失败: "+err.Error())
 		return
@@ -143,4 +144,22 @@ func systemUserDTOs(ctx context.Context, users []*model.User, userService *servi
 
 func usernameParam(c *gin.Context) string {
 	return strings.TrimSpace(c.Param("username"))
+}
+
+func (s *SystemUser) Import(c *gin.Context) {
+	if !requireSystemUser(c) {
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 1024*1024)
+	var req dto.SystemImportUsersReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.FailWithMessage(c, "导入格式错误，最多 100 行、1 MB")
+		return
+	}
+	rows, err := s.userService.ImportUsers(contextx.ToContext(c), req.Rows, req.Preview, contextx.GetRequestUser(c))
+	if err != nil {
+		response.FailWithMessage(c, err.Error())
+		return
+	}
+	response.OkWithData(c, gin.H{"rows": rows})
 }

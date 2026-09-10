@@ -393,7 +393,6 @@ func (s *StorageService) GetSystemStorageAssets(ctx context.Context, req dto.Sys
 			List:              []dto.SystemStorageAsset{},
 			Directories:       []dto.SystemStorageAssetDirectory{},
 			MetadataAvailable: false,
-			ConsoleURL:        s.cfg.GetMinIOConsoleURL(),
 			Coverage:          "tracked_uploads",
 		}, nil
 	}
@@ -495,7 +494,7 @@ func (s *StorageService) GetSystemStorageAssets(ctx context.Context, req dto.Sys
 			DeletedFiles: summaryRow.DeletedFiles, FailedFiles: summaryRow.FailedFiles,
 		},
 		Directories: directories, Workspaces: workspaces, MetadataAvailable: true,
-		ConsoleURL: s.cfg.GetMinIOConsoleURL(), Coverage: "tracked_uploads",
+		Coverage: "tracked_uploads",
 	}, nil
 }
 
