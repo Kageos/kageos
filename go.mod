@@ -8,7 +8,7 @@ require (
 	github.com/go-git/go-git/v5 v5.19.2
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
-	github.com/kageos/kageos-sdk v0.3.3
+	github.com/kageos/kageos-sdk v0.3.4
 	github.com/minio/minio-go/v7 v7.2.1
 	github.com/mitchellh/mapstructure v1.5.0
 	github.com/mozillazg/go-pinyin v0.21.0
